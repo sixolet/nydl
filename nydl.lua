@@ -16,17 +16,18 @@ MODE_SEQUENCE = 2
 MODE_CUE = 3
 
 -- Record states
-NOT_RECORDING = 1
-RECORDING_ONCE = 2
-RECORDING_MANY = 3
-RECORDING_CUE = 4
-PRIMED = 5
+RECORD_PLAYING = 1
+RECORD_MONITORING = 2
+RECORD_ARMED = 3
+RECORD_RECORDING = 4
+RECORD_SOS = 5
 
 sequence = { {}, {}, {}, {} }
 playheads = {}
 step_selections = {nil, nil, nil, nil}
 section_selections = {nil, nil, nil, nil}
 record_states = {1, 1, 1, 1}
+record_timers = {nil, nil, nil, nil}
 mute_states = {false, false , false, false}
 mode = MODE_SOUND
 
@@ -34,6 +35,7 @@ mode = MODE_SOUND
 grid_dirty = true
 grid_flash = 0
 grid_breathe = 5
+grid_breathe_incr = 1
 
 for track=1,4,1 do
   playheads[track] = {
@@ -74,6 +76,7 @@ function advance_playhead(track)
   p.seq_pos = p.seq_pos + 1
   if p.seq_pos > p.loop_end then
     p.seq_pos = p.loop_start
+    on_loop(track)
   end
   step = sequence[track][p.seq_pos]
   if step.beat ~= nil then
@@ -162,6 +165,8 @@ function grid_clock()
       grid_redraw() -- redraw...
       grid_dirty = false -- then redraw is no longer needed.
     end
+    grid_mini_redraw()
+    g:refresh()
   end
 end
 
@@ -214,6 +219,66 @@ function manage_selection(z, pressed, selections, persist)
   end
 end
 
+function on_loop(track)
+  local state = record_states[track]
+  if state == RECORD_RECORDING then
+    -- TODO: stop recording; stop monitoring
+    record_states[track] = RECORD_PLAYING
+  elseif state == RECORD_ARMED then
+    -- TODO: start recording
+    record_states[track] = RECORD_RECORDING
+  end
+end
+
+function record_press_initiated(track)
+  record_timers[track] = clock.run(
+    function () 
+      clock.sleep(0.5)
+      record_timers[track] = nil
+      record_longpressed(track)
+    end)  
+end
+
+function record_released(track)
+  if record_timers[track] ~= nil then
+    clock.cancel(record_timers[track])
+    record_timers[track] = nil
+    record_pressed(track)
+  end
+end
+
+function record_pressed(track)
+  local state = record_states[track]
+  if state == RECORD_PLAYING then
+    record_states[track] = RECORD_MONITORING
+    -- TODO: start monitoring
+  elseif state == RECORD_MONITORING then
+    record_states[track] = RECORD_ARMED
+  elseif state == RECORD_ARMED then
+    -- pass ?
+  elseif state == RECORD_RECORDING then
+    -- pass ?
+  elseif state == RECORD_SOS then
+    -- TODO: Stop recording
+    record_states[track] = RECORD_MONITORING
+  end  
+end
+
+function record_longpressed(track)
+  local state = record_states[track]
+  if state == RECORD_MONITORING then
+    record_states[track] = RECORD_PLAYING
+    -- TODO: stop monitoring
+  elseif state == RECORD_ARMED then
+    record_states[track] = RECORD_SOS
+    -- TODO: start recording
+  elseif state == RECORD_RECORDING then
+    record_states[track] = RECORD_SOS
+  else
+    record_pressed(track)
+  end    
+end
+
 function g.key(x, y, z)
   -- mode selector
   if z == 1 and x == 1 and y == 1 then
@@ -231,7 +296,17 @@ function g.key(x, y, z)
     grid_dirty = true
     return
   end
-  -- mutes
+  
+  -- Record
+  if x == 6 and y%2 == 1 then
+    local track = div_but_oneindex(y, 2)
+    if z == 1 then
+      record_press_initiated(track)
+    else
+      record_released(track)
+    end
+  end  
+  -- Mute
   if z == 1 and x == 6 and y%2 == 0 then
     local track = div_but_oneindex(y, 2)
     mute_states[track] = not mute_states[track]
@@ -267,8 +342,47 @@ function cue_key(x, y, z)
   end
 end
 
+function grid_mini_redraw()
+  -- Button animations
+  if grid_flash == 0 then
+    grid_flash = 1
+  else
+    grid_flash = 0
+  end
+  
+  grid_breathe = grid_breathe + grid_breathe_incr
+  if grid_breathe >= 15 then
+    grid_breathe_incr = -1
+  elseif grid_breathe <= 2 then
+    grid_breathe_incr = 1
+  end
+  
+  -- Per track
+  for track=1,4,1 do
+    local record_x = 6
+    local record_y = mul_but_oneindex(track, 2)
+    local state = record_states[track]
+    if state == RECORD_PLAYING then
+      g:led(record_x, record_y, INACTIVE)
+    elseif state == RECORD_MONITORING then
+      g:led(record_x, record_y, SELECTED)
+    elseif state == RECORD_ARMED then
+      g:led(record_x, record_y, SELECTED*grid_flash)
+    elseif state == RECORD_RECORDING then
+      g:led(record_x, record_y, grid_breathe)
+    elseif state == RECORD_SOS then
+      g:led(record_x, record_y, ACTIVE)
+    end
+    
+    local mute_x = record_x
+    local mute_y = record_y + 1
+    g:led(mute_x, mute_y, mute_states[track] and INACTIVE or SELECTED)
+  end
+end
+
 function grid_redraw()
   g:all(0)
+  
   -- Modes
   g:led(1, 1, mode == MODE_SOUND and SELECTED or INACTIVE)
   g:led(2, 1, mode == MODE_SEQUENCE and SELECTED or INACTIVE)
@@ -320,8 +434,6 @@ function grid_redraw()
       end
     end
   end
-  -- Do the thing
-  g:refresh()
 end
 
 function init()
