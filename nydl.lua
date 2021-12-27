@@ -29,6 +29,8 @@ section_selections = {nil, nil, nil, nil}
 record_states = {1, 1, 1, 1}
 record_timers = {nil, nil, nil, nil}
 mute_states = {false, false , false, false}
+select_held = false
+froze = false
 mode = MODE_SOUND
 
 -- Grid data
@@ -184,6 +186,7 @@ function manage_selection(z, pressed, selections, persist)
         held = held,
         persist = persist,
       }
+      grid_dirty = true
     elseif z == 1 then
       if pressed.index < current_selection.first then
         current_selection.first = pressed.index
@@ -201,6 +204,7 @@ function manage_selection(z, pressed, selections, persist)
         current_selection.last = pressed.index
       end
      current_selection.held[pressed.index] = true
+     grid_dirty = true
     elseif z == 0 and current_selection ~= nil then
       current_selection.held[pressed.index] = nil
       if next(current_selection.held) == nil and not current_selection.persist then
@@ -210,11 +214,12 @@ function manage_selection(z, pressed, selections, persist)
         current_selection.first = sorted[1]
         current_selection.last = sorted[#sorted]
       end
+      grid_dirty = true
     end
     if selections[pressed.track] ~= nil then
-      tab.print(selections[pressed.track])
+      -- Pass
     else
-      print("no selection for", pressed.track)
+      -- Pass
     end
   end
 end
@@ -297,6 +302,30 @@ function g.key(x, y, z)
     return
   end
   
+  -- Select
+  if z == 1 and x == 1 and y == 8 then
+    froze = false
+    select_held = true
+    for track=1,4,1 do
+      if step_selections[track] ~= nil then
+        if not step_selections[track].persist then
+          step_selections[track].persist = true
+          froze = true
+        end
+      end
+    end
+    print("froze is now", froze)
+  end
+  if z == 0 and x == 1 and y == 8 then
+    if not froze then
+      print("deselect")
+      for track=1,4,1 do
+        step_selections[track] = nil
+      end
+    end
+    select_held = false
+  end  
+  
   -- Record
   if x == 6 and y%2 == 1 then
     local track = div_but_oneindex(y, 2)
@@ -318,8 +347,9 @@ function g.key(x, y, z)
   
   -- Step selection
   pressed = step_for_button(x, y)
-  manage_selection(z, pressed, step_selections, false)
-  
+  manage_selection(z, pressed, step_selections, select_held)
+  if pressed ~= nil and select_held then froze = true end
+
   if mode == MODE_SOUND then
     sound_key(x, y, z)
   elseif mode == MODE_SEQUENCE then
@@ -388,6 +418,15 @@ function grid_redraw()
   g:led(2, 1, mode == MODE_SEQUENCE and SELECTED or INACTIVE)
   g:led(3, 1, mode == MODE_CUE and SELECTED or INACTIVE)
 
+  -- Select
+  local select_persist = false
+  for track=1,4,1 do
+    if step_selections[track] ~= nil and step_selections[track].persist then
+      select_persist = true
+      break
+    end
+  end
+  g:led(1, 8, select_persist and SELECTED or INACTIVE)
   -- Sections
   for x=7,8,1 do
     for y=1,8,1 do
