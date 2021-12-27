@@ -56,6 +56,12 @@ end
 
 function active_section(track)
   -- Todo: lock to selection
+  if step_selections[track] ~= nil then
+    return div_but_oneindex(step_selections[track].first, 16)
+  end
+  if section_selections[track] ~= nil then
+    return section_selections[track].first
+  end
   if mode == MODE_SEQUENCE then
     return div_but_oneindex(playheads[track].seq_pos, 16)
   else
@@ -113,8 +119,6 @@ end
 
 function step_for_button(x, y)
   if x > 8 then
-    print("btn", x, y)
-
     local track = div_but_oneindex(y, 2)
     local section = active_section(track)
     local subsection = (x-8) + 8 * ( (y-1) % 2)
@@ -161,42 +165,51 @@ function grid_clock()
   end
 end
 
-function manage_selection(pressed, selections, persist)
+function manage_selection(z, pressed, selections, persist)
   if pressed ~= nil then
-  local current_selection = selections[pressed.track]
-  if z == 1 and current_selection == nil then
-    -- Begin selection
-    selections[pressed.track] = {
-      first = pressed.index,
-      last = pressed.index,
-      held = {pressed.index = true},
-      persist = persist,
-    }
-  elseif z == 1 then
-    if pressed.index < current_selection.first then
-      current_selection.first = pressed.index
-    elseif pressed.index > current_selection.last then
-      current_selection.last = pressed.index
-    elseif current_selection.held[current_selection.first] then
-      current_selection.last = pressed.index
-    elseif current_selection.held[current_selection.last] then
-      current_selection.first = pressed.index
-    elseif current_selection.first == current_selection.last and current_selection.first == pressed.index then
-      -- pressing a selected thing again clears the selection
-      selections[pressed.track] = nil
-    else
-      current_selection.first = pressed.index
-      current_selection.last = pressed.index
+    local current_selection = selections[pressed.track]
+    if z == 1 and current_selection == nil then
+      -- Begin selection
+      local held = {}
+      held[pressed.index] = true
+      print ("begin selection")
+      selections[pressed.track] = {
+        first = pressed.index,
+        last = pressed.index,
+        held = held,
+        persist = persist,
+      }
+    elseif z == 1 then
+      if pressed.index < current_selection.first then
+        current_selection.first = pressed.index
+      elseif pressed.index > current_selection.last then
+        current_selection.last = pressed.index
+      elseif current_selection.held[current_selection.first] then
+        current_selection.last = pressed.index
+      elseif current_selection.held[current_selection.last] then
+        current_selection.first = pressed.index
+      elseif current_selection.first == current_selection.last and current_selection.first == pressed.index then
+        -- pressing a selected thing again clears the selection
+        selections[pressed.track] = nil
+      else
+        current_selection.first = pressed.index
+        current_selection.last = pressed.index
+      end
+     current_selection.held[pressed.index] = true
+    elseif z == 0 and current_selection ~= nil then
+      current_selection.held[pressed.index] = nil
+      if next(current_selection.held) == nil and not current_selection.persist then
+        selections[pressed.track] = nil
+      elseif not current_selection.persist then
+        local sorted = tab.sort(current_selection.held)
+        current_selection.first = sorted[1]
+        current_selection.last = sorted[#sorted]
+      end
     end
-    current_selection.held[pressed.index] = true
-  elseif z == 0 and current_selection ~= nil then
-    current_selection.held[pressed.index] = nil
-    if next(current_selection.held) == nil and not current_selection.persist then
-      selections[pressed.track] = nil
-    elseif not current_selection.persist then
-      local sorted = tab.sort(current_selection.held)
-      current_selection.first = sorted[1]
-      current_selection.last = sorted[#sorted]
+    if selections[pressed.track] ~= nil then
+      tab.print(selections[pressed.track])
+    else
+      print("no selection for", pressed.track)
     end
   end
 end
@@ -226,10 +239,11 @@ function g.key(x, y, z)
   
   -- Section selection
   local pressed = section_for_button(x, y)
-  manage_selection(pressed, section_selections, true)
+  manage_selection(z, pressed, section_selections, true)
   
   -- Step selection
-  manage_selection(pressed, step_selections, false)
+  pressed = step_for_button(x, y)
+  manage_selection(z, pressed, step_selections, false)
   
   if mode == MODE_SOUND then
     sound_key(x, y, z)
@@ -260,42 +274,53 @@ function grid_redraw()
   g:led(2, 1, mode == MODE_SEQUENCE and SELECTED or INACTIVE)
   g:led(3, 1, mode == MODE_CUE and SELECTED or INACTIVE)
 
-  for track=1,4,1 do
-    local track_y = (track-1) * 2
-    local p = playheads[track]
-    local buttons
-    -- mutes are bright when false
-    g:led(6, mul_but_oneindex(track, 2) + 1, mute_states[track] and INACTIVE or ACTIVE)
-    -- sequence view
-    if mode == MODE_SEQUENCE then
-      buttons = buttons_for_step(track, p.seq_pos)
-      -- Light the looped section
-      local section_start = 0
-      for s=1,4,1 do
-        local section_x = 6 + mod_but_oneindex(s, 2)
-        local section_y = track_y + div_but_oneindex(s, 2)
-        section_start = mul_but_oneindex(s, 16)
-        if s == selected_sections[track] then
-          g:led(section_x, section_y, SELECTED)
-        elseif (section_start+15) >= p.loop_start and section_start <= p.loop_end then
-          g:led(section_x, section_y, IN_LOOP)
+  -- Sections
+  for x=7,8,1 do
+    for y=1,8,1 do
+      local section = section_for_button(x, y)
+      local selection = section_selections[section.track]
+      local playhead = playheads[section.track]
+      local loop_start_section = mod_but_oneindex(playhead.loop_start, 16)
+      local loop_end_section = mod_but_oneindex(playhead.loop_end, 16)
+      if mode == MODE_SEQUENCE and section.index >= loop_start_section and section.index <= loop_end_section then
+        g:led(x, y, IN_LOOP)
+      end
+      if selection ~= nil then
+        if section.index >= selection.first and section.index <= selection.last then
+          g:led(x, y, SELECTED)
         end
-        if s == buttons.section then
-          for i=section_start,section_start+15,1 do
-            if i >= p.loop_start and i <= p.loop_end then
-              g:led(8 + mod_but_oneindex(i, 8), track_y + div_but_oneindex(i-section_start, 8), IN_LOOP)
-            end
-          end
-        end
-      end      
-    else
-      buttons = buttons_for_step(track, p.buf_pos)
+      end
+      if mode == MODE_SEQUENCE and section.index == div_but_oneindex(playhead.seq_pos, 16) then
+        g:led(x, y, ACTIVE)
+      end
+      if (mode == MODE_SOUND or mode == MODE_CUE) and section.index == div_but_oneindex(playhead.buf_pos, 16) then
+        g:led(x, y, ACTIVE)
+      end
     end
-
-    -- Light the playheads bright
-    g:led(buttons.coarse_x, buttons.coarse_y, ACTIVE)
-    g:led(buttons.fine_x, buttons.fine_y, ACTIVE)
   end
+  -- Steps
+  for x=9,16,1 do
+    for y=1,8,1 do
+      local step = step_for_button(x, y)
+      local selection = step_selections[step.track]
+      local playhead = playheads[step.track]
+      if mode == MODE_SEQUENCE and step.index >= playhead.loop_start and step.index <= playhead.loop_end then
+        g:led(x, y, IN_LOOP)
+      end
+      if selection ~= nil then
+        if step.index >= selection.first and step.index <= selection.last then
+          g:led(x, y, SELECTED)
+        end
+      end
+      if mode == MODE_SEQUENCE and step.index == playhead.seq_pos then
+        g:led(x, y, ACTIVE)
+      end
+      if (mode == MODE_SOUND or mode == MODE_CUE) and step.index == playhead.buf_pos then
+        g:led(x, y, ACTIVE)
+      end
+    end
+  end
+  -- Do the thing
   g:refresh()
 end
 
