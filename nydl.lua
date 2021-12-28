@@ -4,7 +4,8 @@ g = grid.connect()
 
 -- Brightnesses
 OFF = 0
-IN_LOOP = 2
+IN_LOOP = 3
+IN_LOOP_SECTION = 2
 INACTIVE = 4
 INTERESTING = 12
 SELECTED = 8
@@ -22,6 +23,7 @@ RECORD_ARMED = 3
 RECORD_RECORDING = 4
 RECORD_SOS = 5
 
+-- Global script data
 sequence = { {}, {}, {}, {} }
 playheads = {}
 step_selections = {nil, nil, nil, nil}
@@ -32,6 +34,67 @@ mute_states = {false, false , false, false}
 select_held = false
 froze = false
 mode = MODE_SOUND
+
+-- Tools
+tools = {
+  loop = {
+    x = 3,
+    y = 8,
+    pressed = false,
+    modes = {MODE_SEQUENCE},
+    apply = function (track, sel)
+      if sel ~= nil then
+        local ph = playheads[track]
+        print("looping", track, sel.first, sel.last)
+        ph.loop_start = sel.first
+        ph.loop_end = sel.last
+      end
+    end,
+  },
+  cut = {
+    x = 1,
+    y = 7,
+    pressed = false,
+    modes = {MODE_SOUND, MODE_SEQUENCE, MODE_CUE},
+    apply = function(sel)
+    end,
+  },
+  copy = {
+    x = 2,
+    y = 7,
+    pressed = false,
+    modes = {MODE_SOUND, MODE_SEQUENCE},
+    apply = function(sel)
+    end,
+  },
+  paste = {
+    x = 3,
+    y = 7,
+    pressed = false,
+    modes = {MODE_SOUND, MODE_SEQUENCE},
+    apply = function(sel)
+    end,
+  }
+}
+
+tools_by_coordinate = {}
+for k, v in pairs(tools) do
+  x_0 = v.x - 1
+  y_0 = v.y - 1
+  local idx = x_0*8 + y_0
+  tools_by_coordinate[idx] = k
+end
+
+function lookup_tool(x, y)
+  x_0 = x - 1
+  y_0 = y - 1 
+  local idx = x_0*8 + y_0
+  local key = tools_by_coordinate[idx]
+  if key ~= nil then
+    return tools[key]
+  end
+  return nil
+end
 
 -- Grid data
 grid_dirty = true
@@ -76,7 +139,7 @@ end
 function advance_playhead(track)
   local p = playheads[track]
   p.seq_pos = p.seq_pos + 1
-  if p.seq_pos > p.loop_end then
+  if p.seq_pos > p.loop_end or p.seq_pos < p.loop_start then
     p.seq_pos = p.loop_start
     on_loop(track)
   end
@@ -172,7 +235,24 @@ function grid_clock()
   end
 end
 
+function active_selection(track)
+  if step_selections[track] ~= nil then
+    print("step sel")
+    tab.print(step_selections[track])
+    return step_selections[track]
+  end
+  local section_sel = section_selections[track]
+  print("section_sel", section_sel)
+  if section_sel ~= nil and next(section_sel.held) ~= nil then
+    return {
+      first = mul_but_oneindex(section_sel.first, 16),
+      last = mul_but_oneindex(section_sel.last, 16) + 15,
+    }
+  end
+end
+
 function manage_selection(z, pressed, selections, persist)
+  local apply_tools = false
   if pressed ~= nil then
     local current_selection = selections[pressed.track]
     if z == 1 and current_selection == nil then
@@ -187,6 +267,7 @@ function manage_selection(z, pressed, selections, persist)
         persist = persist,
       }
       grid_dirty = true
+      apply_tools = true
     elseif z == 1 then
       if pressed.index < current_selection.first then
         current_selection.first = pressed.index
@@ -205,6 +286,7 @@ function manage_selection(z, pressed, selections, persist)
       end
      current_selection.held[pressed.index] = true
      grid_dirty = true
+     apply_tools = true
     elseif z == 0 and current_selection ~= nil then
       current_selection.held[pressed.index] = nil
       if next(current_selection.held) == nil and not current_selection.persist then
@@ -216,8 +298,13 @@ function manage_selection(z, pressed, selections, persist)
       end
       grid_dirty = true
     end
-    if selections[pressed.track] ~= nil then
-      -- Pass
+    if selections[pressed.track] ~= nil and apply_tools then
+      -- Apply any tools to the new selection
+      for k, tool in pairs(tools) do
+        if tool.pressed and tool.apply ~= nil then
+          tool.apply(pressed.track, active_selection(pressed.track))
+        end
+      end
     else
       -- Pass
     end
@@ -315,6 +402,7 @@ function g.key(x, y, z)
       end
     end
     print("froze is now", froze)
+    grid_dirty = true
   end
   if z == 0 and x == 1 and y == 8 then
     if not froze then
@@ -324,6 +412,7 @@ function g.key(x, y, z)
       end
     end
     select_held = false
+    grid_dirty = true
   end  
   
   -- Record
@@ -339,6 +428,26 @@ function g.key(x, y, z)
   if z == 1 and x == 6 and y%2 == 0 then
     local track = div_but_oneindex(y, 2)
     mute_states[track] = not mute_states[track]
+  end
+  -- Tools
+  local tool = lookup_tool(x, y)
+  if tool ~= nil then
+    if tab.contains(tool.modes, mode) then
+      if z == 1 then
+        tool.pressed = true
+        if tool.apply ~= nil then
+          for track=1,4,1 do
+            tool.apply(track, active_selection(track))
+          end
+        end
+        if tool.handle ~= nil then
+          tool.handle()
+        end
+      else
+        tool.pressed = false
+      end
+      grid_dirty = true
+    end
   end
   
   -- Section selection
@@ -426,17 +535,23 @@ function grid_redraw()
       break
     end
   end
-  g:led(1, 8, select_persist and SELECTED or INACTIVE)
+  -- Tools
+  g:led(1, 8, select_held and ACTIVE or (select_persist and SELECTED or INACTIVE))
+  for k, v in pairs(tools) do
+    if tab.contains(v.modes, mode) then
+      g:led(v.x, v.y, v.pressed and ACTIVE or INACTIVE)
+    end
+  end
   -- Sections
   for x=7,8,1 do
     for y=1,8,1 do
       local section = section_for_button(x, y)
       local selection = section_selections[section.track]
       local playhead = playheads[section.track]
-      local loop_start_section = mod_but_oneindex(playhead.loop_start, 16)
-      local loop_end_section = mod_but_oneindex(playhead.loop_end, 16)
+      local loop_start_section = div_but_oneindex(playhead.loop_start, 16)
+      local loop_end_section = div_but_oneindex(playhead.loop_end, 16)
       if mode == MODE_SEQUENCE and section.index >= loop_start_section and section.index <= loop_end_section then
-        g:led(x, y, IN_LOOP)
+        g:led(x, y, IN_LOOP_SECTION)
       end
       if selection ~= nil then
         if section.index >= selection.first and section.index <= selection.last then
