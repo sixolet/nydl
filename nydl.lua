@@ -45,9 +45,13 @@ tools = {
     apply = function (track, sel)
       if sel ~= nil then
         local ph = playheads[track]
+        local offset = ph.seq_pos - ph.loop_start
         print("looping", track, sel.first, sel.last)
         ph.loop_start = sel.first
         ph.loop_end = sel.last
+        if ph.seq_pos > ph.loop_end or ph.seq_pos < ph.loop_start then
+          ph.seq_pos = ph.loop_start + (offset % (ph.loop_end - ph.loop_start))
+        end
       end
     end,
   },
@@ -114,11 +118,20 @@ for track=1,4,1 do
   
   for step=1,64,1 do
     sequence[track][step] = {
-      buf_pos = nil, -- Jump to this beat in the buffer
-      rate = nil, -- Set the playback to this rate
-      subdivision = nil, -- Do the action every x beats, for stutter
+      buf_pos = step, -- Jump to this beat in the buffer
+      rate = 1, -- Set the playback to this rate
+      subdivision = nil, -- Do the action every x steps, for stutter
     }
   end
+end
+
+function default_next(step)
+  -- The default next step if our parameters don't change. A stuttered step keeps resetting; otherwise advance
+  return {
+    buf_pos = (step.subdivision == nil) and (step.buf_pos) or (step.buf_pos + step.rate),
+    rate = step.rate,
+    subdivision = step.subdivision,
+  }
 end
 
 function active_section(track)
@@ -138,20 +151,19 @@ end
 
 function advance_playhead(track)
   local p = playheads[track]
+  local prev_step = sequence[track][p.seq_pos]
   p.seq_pos = p.seq_pos + 1
   if p.seq_pos > p.loop_end or p.seq_pos < p.loop_start then
     p.seq_pos = p.loop_start
     on_loop(track)
   end
-  step = sequence[track][p.seq_pos]
-  if step.beat ~= nil then
-    p.buf_pos = step.buf_pos
-  else
-    p.buf_pos = mod_but_oneindex(p.buf_pos + p.rate, 64)
+  local step = sequence[track][p.seq_pos]
+  local predicted_step = default_next(prev_step)
+  if step.rate ~= predicted_step.rate or step.buf_pos ~= predicted_step.buf_pos or step.subdivision ~= predicted_step.subdivision then
+    -- TODO: jump in the buffer, or adjust its rate, or w/e
   end
-  if step.rate ~= nil then
-    p.rate = step.rate
-  end
+  p.buf_pos = step.buf_pos
+  p.rate = step.rate
   grid_dirty = true
 end
 
@@ -269,22 +281,14 @@ function manage_selection(z, pressed, selections, persist)
       grid_dirty = true
       apply_tools = true
     elseif z == 1 then
-      if pressed.index < current_selection.first then
-        current_selection.first = pressed.index
-      elseif pressed.index > current_selection.last then
-        current_selection.last = pressed.index
-      elseif current_selection.held[current_selection.first] then
-        current_selection.last = pressed.index
-      elseif current_selection.held[current_selection.last] then
-        current_selection.first = pressed.index
-      elseif current_selection.first == current_selection.last and current_selection.first == pressed.index then
-        -- pressing a selected thing again clears the selection
-        selections[pressed.track] = nil
+      current_selection.held[pressed.index] = true
+      local sorted = tab.sort(current_selection.held)
+      if current_selection.first == current_selection.last and current_selection.first == pressed.index and #sorted == 1 then
+        current_selection[pressed.track] = nil
       else
-        current_selection.first = pressed.index
-        current_selection.last = pressed.index
+        current_selection.first = sorted[1]
+        current_selection.last = sorted[#sorted]
       end
-     current_selection.held[pressed.index] = true
      grid_dirty = true
      apply_tools = true
     elseif z == 0 and current_selection ~= nil then
