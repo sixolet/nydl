@@ -25,6 +25,7 @@ RECORD_SOS = 5
 
 -- Global script data
 sequence = { {}, {}, {}, {} }
+pattern_buffer = nil
 playheads = {}
 step_selections = {nil, nil, nil, nil}
 section_selections = {nil, nil, nil, nil}
@@ -50,7 +51,7 @@ tools = {
         ph.loop_start = sel.first
         ph.loop_end = sel.last
         if ph.seq_pos > ph.loop_end or ph.seq_pos < ph.loop_start then
-          ph.seq_pos = ph.loop_start + (offset % (ph.loop_end - ph.loop_start))
+          ph.seq_pos = ph.loop_start + (offset % (ph.loop_end - ph.loop_start + 1))
         end
       end
     end,
@@ -60,7 +61,23 @@ tools = {
     y = 7,
     pressed = false,
     modes = {MODE_SOUND, MODE_SEQUENCE, MODE_CUE},
-    apply = function(sel)
+    apply = function(track, sel)
+      if mode == MODE_SEQUENCE then
+        if sel == nil then return end
+        local seq = sequence[track]
+        -- Copy to the pattern buffer, then clear to defaults
+        pattern_buffer = {}
+        for i=sel.first,sel.last,1 do
+          table.insert(pattern_buffer, {
+            buf_pos = seq[i].buf_pos,
+            rate = seq[i].rate,
+            subdivision = seq[i].subdivision
+          })
+          seq[i].buf_pos = i
+          seq[i].rate = 1
+          seq[i].subdivision = nil
+        end
+      end
     end,
   },
   copy = {
@@ -68,7 +85,23 @@ tools = {
     y = 7,
     pressed = false,
     modes = {MODE_SOUND, MODE_SEQUENCE},
-    apply = function(sel)
+    apply = function(track, sel)
+      if mode == MODE_SEQUENCE then
+        if sel == nil then return end
+        local seq = sequence[track]
+        -- Copy to the pattern buffer, then clear to defaults
+        pattern_buffer = {}
+        for i=sel.first,sel.last,1 do
+          table.insert(pattern_buffer, {
+            buf_pos = seq[i].buf_pos,
+            rate = seq[i].rate,
+            subdivision = seq[i].subdivision
+          })        end
+        print("pattern buffer")
+        for i, p in ipairs(pattern_buffer) do
+          tab.print(p)
+        end
+      end      
     end,
   },
   paste = {
@@ -76,7 +109,25 @@ tools = {
     y = 7,
     pressed = false,
     modes = {MODE_SOUND, MODE_SEQUENCE},
-    apply = function(sel)
+    apply = function(track, sel)
+      if mode == MODE_SEQUENCE and pattern_buffer ~= nil then
+        if sel == nil then return end
+        local seq = sequence[track]
+        local last = math.min(sel.last, sel.first + #pattern_buffer - 1)
+        if sel.first == sel.last then
+          last = sel.first + #pattern_buffer - 1
+        end
+        if last > 64 then
+          last = 64
+        end
+        local p = 1
+        for i=sel.first,last,1 do
+          seq[i].buf_pos = pattern_buffer[p].buf_pos
+          seq[i].rate = pattern_buffer[p].rate
+          seq[i].subdivision = pattern_buffer[p].subdivision
+          p = p + 1
+        end
+      end      
     end,
   }
 }
