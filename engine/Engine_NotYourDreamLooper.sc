@@ -1,7 +1,7 @@
 // NotYourDreamLooper can play slices of a buffer and record to it.
 
 NydlTrack {
-	var <server, <division, <buffer, <bufferTempo, <synth, <monitorSynth, <recording, <out;
+	var <server, <division, <buffer, <bufferTempo, <synth, <monitorSynth, <recording, <level, <out;
 
 	*new { |server, division, filename=nil, fileTempo=nil, fileBeats=nil|
 		var buffer, bufferTempo;
@@ -20,8 +20,8 @@ NydlTrack {
 			buffer = Buffer.alloc(server, server.sampleRate*((64*division/tempo) + 1), 2);
 			bufferTempo = tempo;
 		});
-		super.newCopyArgs(
-			server, division, buffer, bufferTempo, nil, nil, false, out);
+		^super.newCopyArgs(
+			server, division, buffer, bufferTempo, nil, nil, false, 1, out);
 	}
 
 	free {
@@ -40,17 +40,18 @@ NydlTrack {
 			monitorSynth = nil;
 			recording = false;
 		});
-		synth = Synth(\playSlice, [
-				out: out,
-				buf: buffer,
-				bufTempo: bufferTempo,
-				clockTempo: TempoClock.tempo,
-				pos: pos,
-				division: division,
-				rate: rate,
-				loop: loop,
-				gate: 1,
-			]);
+		synth = Synth(\playStep, [
+			out: out,
+			buf: buffer,
+			bufTempo: bufferTempo,
+			clockTempo: TempoClock.tempo,
+			pos: pos,
+			division: division,
+			rate: rate,
+			loop: loop,
+			gate: 1,
+			level: level
+		]);
 	}
 
 	monitor {
@@ -65,12 +66,20 @@ NydlTrack {
 		});
 		recording = true;
 		synth = Synth(\record, [
-				out: out,
-				buf: buffer,
-				tempo: TempoClock.tempo,
-				pos: pos,
-				gate: 1,
-			]);
+			out: out,
+			buf: buffer,
+			tempo: TempoClock.tempo,
+			pos: pos,
+			gate: 1,
+			level: level,
+		]);
+	}
+
+	level_ { |l|
+		level = l;
+		if (synth != nil, {
+			synth.set(\level, l)
+		});
 	}
 
 }
@@ -91,7 +100,7 @@ Engine_NotYourDreamLooper : CroneEngine {
 	alloc {
 		var fadeEnv = Env.asr(0.01, 1.0, 0.01, curve: 0);
 
-		SynthDef.new(\playSlice, { |out, buf, bufTempo, clockTempo, pos, division, rate=1, loop=64, gate=1, level=1|
+		SynthDef.new(\playStep, { |out, buf, bufTempo, clockTempo, pos, division, rate=1, loop=64, gate=1, level=1|
 			var r = rate*(bufTempo/clockTempo)*BufRateScale.kr(buf);
 			var start = BufRateScale.kr(buf) * SampleRate.ir  * (pos*division/bufTempo);
 			var end = start + (BufRateScale.kr(buf) * SampleRate.ir * (loop*division/bufTempo));
@@ -147,6 +156,14 @@ Engine_NotYourDreamLooper : CroneEngine {
 			var pos = msg[2].asFloat - 1;
 			if (tracks != nil, {
 				tracks[track].record(pos);
+			});
+		});
+
+		this.addCommand("level", "if", { |msg|
+			var track = msg[1].asInteger - 1;
+			var level = msg[2].asFloat;
+			if (tracks != nil, {
+				tracks[track].level = level;
 			});
 		});
 

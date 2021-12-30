@@ -1,5 +1,7 @@
 tab = require 'tabutil'
 
+engine.name = 'NotYourDreamLooper'
+
 g = grid.connect()
 
 -- Brightnesses
@@ -68,14 +70,17 @@ tools = {
         -- Copy to the pattern buffer, then clear to defaults
         pattern_buffer = {}
         for i=sel.first,sel.last,1 do
-          table.insert(pattern_buffer, {
-            buf_pos = seq[i].buf_pos,
-            rate = seq[i].rate,
-            subdivision = seq[i].subdivision
-          })
+          local copied = {}
+          for k, v in pairs(seq[i]) do
+            copied[k] = v
+          end
+          table.insert(pattern_buffer, copied)
           seq[i].buf_pos = i
           seq[i].rate = 1
           seq[i].subdivision = nil
+          seq[i].lock_pos = false
+          seq[i].lock_rate = false
+          seq[i].lock_subdivision = false
         end
       end
     end,
@@ -92,11 +97,12 @@ tools = {
         -- Copy to the pattern buffer, then clear to defaults
         pattern_buffer = {}
         for i=sel.first,sel.last,1 do
-          table.insert(pattern_buffer, {
-            buf_pos = seq[i].buf_pos,
-            rate = seq[i].rate,
-            subdivision = seq[i].subdivision
-          })        end
+          local copied = {}
+          for k, v in pairs(seq[i]) do
+            copied[k] = v
+          end
+          table.insert(pattern_buffer, copied)
+        end
         print("pattern buffer")
         for i, p in ipairs(pattern_buffer) do
           tab.print(p)
@@ -122,10 +128,18 @@ tools = {
         end
         local p = 1
         for i=sel.first,last,1 do
-          seq[i].buf_pos = pattern_buffer[p].buf_pos
-          seq[i].rate = pattern_buffer[p].rate
-          seq[i].subdivision = pattern_buffer[p].subdivision
+          for k, v in pairs(pattern_buffer[p]) do
+            seq[i][k] = v
+          end
           p = p + 1
+        end
+        seq[sel.first].lock_pos = true
+        seq[sel.first].lock_rate = true
+        seq[sel.first].lock_subdivision = true
+        if sel.last < 64 then
+          seq[sel.last + 1].lock_pos = true
+          seq[sel.last + 1].lock_rate = true
+          seq[sel.last + 1].lock_subdivision = true
         end
       end      
     end,
@@ -159,9 +173,9 @@ grid_breathe_incr = 1
 
 for track=1,4,1 do
   playheads[track] = {
-    seq_pos = 1,
+    seq_pos = 64,
     rate = 1,
-    buf_pos = 1,
+    buf_pos = 64,
     loop_start = 1, -- loop within sequence
     loop_end = 64,  -- loop within sequence
     division = 0.25, -- beats per step in sequence
@@ -209,15 +223,25 @@ end
 function advance_playhead(track)
   local p = playheads[track]
   local prev_step = sequence[track][p.seq_pos]
+  local looped = false
   p.seq_pos = p.seq_pos + 1
   if p.seq_pos > p.loop_end or p.seq_pos < p.loop_start then
     p.seq_pos = p.loop_start
     on_loop(track)
+    looped = true
   end
   local step = sequence[track][p.seq_pos]
-  local predicted_step = default_next(prev_step)
-  if step.rate ~= predicted_step.rate or step.buf_pos ~= predicted_step.buf_pos or step.subdivision ~= predicted_step.subdivision then
-    -- TODO: jump in the buffer, or adjust its rate, or w/e
+  if record_states[track] == RECORD_RECORDING then
+    p.buf_pos = p.seq_pos
+    p.rate = 1
+    if looped then
+      engine.record(track, p.seq_pos)
+    end
+    grid_dirty = true
+    return
+  elseif step.lock_pos or step.lock_rate or step.lock_subdivision or looped then
+    print ("playing step", step.buf_pos, step.rate, step.subdivision)
+    engine.playStep(track, step.buf_pos, step.rate, step.subdivision or 64.0)
   end
   p.buf_pos = step.buf_pos
   p.rate = step.rate
@@ -286,9 +310,11 @@ function section_for_button(x, y)
 end
 
 function sequencer_clock(track)
+  -- Start at a (plausible) measure line.
+  clock.sync(4)
   while true do
-    clock.sync(playheads[track].division)
     advance_playhead(track)
+    clock.sync(playheads[track].division)
   end
 end
 
@@ -375,10 +401,10 @@ end
 function on_loop(track)
   local state = record_states[track]
   if state == RECORD_RECORDING then
-    -- TODO: stop recording; stop monitoring
+    -- stopping recording and monitoring happens as soon as the next slice plays.
     record_states[track] = RECORD_PLAYING
   elseif state == RECORD_ARMED then
-    -- TODO: start recording
+    -- starting recording happens instead of playing a slice.
     record_states[track] = RECORD_RECORDING
   end
 end
@@ -404,7 +430,8 @@ function record_pressed(track)
   local state = record_states[track]
   if state == RECORD_PLAYING then
     record_states[track] = RECORD_MONITORING
-    -- TODO: start monitoring
+    -- start monitoring
+    engine.monitor(track)
   elseif state == RECORD_MONITORING then
     record_states[track] = RECORD_ARMED
   elseif state == RECORD_ARMED then
@@ -651,7 +678,18 @@ function grid_redraw()
   end
 end
 
+function sync_every_beat()
+  while true do
+    clock.sync(1)
+    b = clock.get_beats()
+    t = clock.get_tempo()
+    engine.tempo_sync(b, t/60.0)
+  end
+end
+
 function init()
+  clock.run(sync_every_beat)
+  
   for track=1,4,1 do
     clock.run(sequencer_clock, track)
   end
