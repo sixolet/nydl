@@ -172,6 +172,9 @@ for track=1,4,1 do
       buf_pos = step, -- Jump to this beat in the buffer
       rate = 1, -- Set the playback to this rate
       subdivision = nil, -- Do the action every x steps, for stutter
+      lock_pos = false,
+      lock_rate = false,
+      lock_subdivision = false,
     }
   end
 end
@@ -182,6 +185,9 @@ function default_next(step)
     buf_pos = (step.subdivision == nil) and (step.buf_pos) or (step.buf_pos + step.rate),
     rate = step.rate,
     subdivision = step.subdivision,
+    lock_pos = false,
+    lock_rate = false,
+    lock_subdivision = false,
   }
 end
 
