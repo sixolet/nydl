@@ -403,6 +403,11 @@ function on_loop(track)
   if state == RECORD_RECORDING then
     -- stopping recording and monitoring happens as soon as the next slice plays.
     record_states[track] = RECORD_PLAYING
+    -- automatically unmute a track as soon as it finishes recording, since "mute and record" is the trick for "don't overdub"
+    if mute_states[track] then
+      mute_states[track] = false
+      engine.level(track, 1)
+    end
   elseif state == RECORD_ARMED then
     -- starting recording happens instead of playing a slice.
     record_states[track] = RECORD_RECORDING
@@ -516,6 +521,11 @@ function g.key(x, y, z)
   if z == 1 and x == 6 and y%2 == 0 then
     local track = div_but_oneindex(y, 2)
     mute_states[track] = not mute_states[track]
+    if mute_states[track] then
+      engine.level(track, 0)
+    else
+      engine.level(track, 1)
+    end
   end
   -- Tools
   local tool = lookup_tool(x, y)

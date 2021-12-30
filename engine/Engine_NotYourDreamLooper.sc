@@ -121,17 +121,18 @@ Engine_NotYourDreamLooper : CroneEngine {
 			var in = SoundIn.ar([0, 1]);
 			var start = SampleRate.ir  * (pos*division/tempo);
 			var env = EnvGen.kr(fadeEnv, gate, doneAction: Done.freeSelf);
+			var llevel = level.lag(0.01);
+			Out.ar(out, llevel*env*PlayBuf.ar(2, buf, rate: 1.0, startPos: start, loop: 1.0));
 			RecordBuf.ar(
 				in,
 				buf,
 				offset: start,
 				recLevel: env,
-				preLevel: level,
+				preLevel: llevel,
 				run: 1.0,
 				loop: 1.0,
 				trigger: 1.0,
 				doneAction: 0);
-			Out.ar(out, env*PlayBuf.ar(2, buf, rate: 1.0, startPos: start, loop: 1.0));
 		}).add;
 
 		this.addCommand("playStep", "ifff", { |msg|
