@@ -1,12 +1,26 @@
 // NotYourDreamLooper can play slices of a buffer and record to it.
 
 NydlTrack {
-	var <server, <track, <division, <buffer, <bufferTempo, <synth, <monitorSynth, <recording, <level, <out;
+	var <server, <track, <division, <sendBus, <buffer, <bufferTempo, <synth, <monitorSynth, <recording, <level, <toFx, <out, <fx;
 
-	*new { |server, track, division, filename=nil, fileTempo=nil, fileBeats=nil|
+	*new { |server, track, division, sendBus, filename=nil, fileTempo=nil, fileBeats=nil|
 		var buffer, bufferTempo;
 		var tempo = TempoClock.tempo;
-		var out = Bus.new(\audio, numChannels: 2, server: server);
+		var toFx = Bus.audio(server: server, numChannels: 2);
+		var out = toFx; // Bus.audio(server: server, numChannels: 2);
+		var fx = NodeProxy.new(server, \audio!4, 2);
+		fx[0].source = toFx;
+		fx[1].source = \decimateFx;
+		fx[2].source = \svfFx;
+		fx[3].source = \sendFx;
+		fx.do { |f, i|
+			f.set(\send, sendBus);
+			if(i > 0, {
+				fx[i-1] <>> f;
+			});
+		};
+		//fx[3].play(out, 2);
+
 		if (filename != nil, {
 			try {
 				buffer = Buffer.read(server, filename);
@@ -21,7 +35,7 @@ NydlTrack {
 			bufferTempo = tempo;
 		});
 		^super.newCopyArgs(
-			server, track, division, buffer, bufferTempo, nil, nil, false, 1, out);
+			server, track, division, sendBus, buffer, bufferTempo, nil, nil, false, 1, toFx, out, fx);
 	}
 
 	free {
@@ -42,7 +56,7 @@ NydlTrack {
 		});
 		// Post << "Playing step with loop " << (loop > 0).if(TempoClock.tempo/(loop*division), 0) << "\n";
 		synth = Synth(\playStep, [
-			out: out,
+			out: toFx,
 			buf: buffer,
 			bufTempo: bufferTempo,
 			clockTempo: TempoClock.tempo,
@@ -63,7 +77,7 @@ NydlTrack {
 			});
 		}, {
 			if (monitorSynth == nil, {
-			monitorSynth = Synth(\monitor, [out: out]);
+			monitorSynth = Synth(\monitor, [out: toFx]);
 			});
 		});
 	}
@@ -74,7 +88,7 @@ NydlTrack {
 		});
 		recording = true;
 		synth = Synth(\record, [
-			out: out,
+			out: toFx,
 			buf: buffer,
 			tempo: TempoClock.tempo,
 			pos: pos,
@@ -96,7 +110,7 @@ NydlTrack {
 
 Engine_NotYourDreamLooper : CroneEngine {
 	classvar luaOscPort = 10111;
-	var <tracks, <ampDef;
+	var <tracks, <ampDef, <sendBus, <sendChain;
 
 	*new { arg context, doneCallback;
 		^super.new(context, doneCallback);
@@ -104,13 +118,41 @@ Engine_NotYourDreamLooper : CroneEngine {
 
 	initTracks {
 		tracks = 4.collect { |i|
-			NydlTrack.new(Server.default, i+1, 0.25, nil, nil, nil);
+			NydlTrack.new(Server.default, i+1, 0.25, sendBus, nil, nil, nil);
 		};
+		Post << "here\n";
+		{
+			Mix.ar(tracks.collect({|t| In.ar(t.out, 2)}) ++ [sendChain.last.ar(2)]).tanh
+		}.play;
+		Post << "there\n";
 	}
 
 	alloc {
 		var fadeEnv = Env.asr(0.01, 1.0, 0.01, curve: 0);
 		var luaOscAddr = NetAddr("localhost", luaOscPort);
+		sendBus = Bus.audio(Server.default, numChannels: 2);
+		sendChain = 2.collect { NodeProxy.new };
+		sendChain[0].source = sendBus;
+		sendChain[1].source = { |delay=0.2, repeats=5|
+			CombC.ar(\in.ar(0!2), 2, delay, delay*repeats);
+		};
+		sendChain[0] <>> sendChain[1];
+
+		SynthDef.new(\svfFx, { |out, level, cutoff=1000, res=0.1, low=0, band=1, high=0|
+			var in = \in.ar(0!2);
+			Out.ar(out, level.if(in, SVF.ar(in, cutoff, res, low, band, high)));
+		}).add;
+
+		SynthDef.new(\decimateFx, { |out, level, rate=30000, smooth=0.5|
+			var in = \in.ar(0!2);
+			Out.ar(out, level.if(in, SmoothDecimator.ar(in, rate, smooth)));
+		}).add;
+
+		SynthDef.new(\sendFx, {|out, level, send|
+			var in = \in.ar(0!2);
+			Out.ar(send, level*in);
+			Out.ar(out, in);
+		}).add;
 
 		SynthDef.new(\playStep, { |out, buf, bufTempo, clockTempo, pos, division, rate=1, loop=0, gate=1, level=1|
 			var r = rate*(bufTempo/clockTempo)*BufRateScale.kr(buf);
@@ -213,12 +255,14 @@ Engine_NotYourDreamLooper : CroneEngine {
 				this.initTracks;
 			});
 		});
-
-		{ Mix.ar(tracks.collect(_.out)).tanh }.play;
 	}
 
 	free {
 		tracks.do { |t| t.free};
 		ampDef.free;
+		sendBus.free;
+		sendChain.do { |x|
+			x.free
+		};
 	}
 }
