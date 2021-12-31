@@ -26,6 +26,11 @@ RECORD_ARMED = 3
 RECORD_RECORDING = 4
 RECORD_SOS = 5
 
+-- Cue-mode time selection
+TIME_QTR = 1
+TIME_8TH = 2
+TIME_16TH = 3
+
 -- Global script data
 sequence = { {}, {}, {}, {} }
 amplitudes = { {}, {}, {}, {} }
@@ -38,6 +43,7 @@ record_timers = {nil, nil, nil, nil}
 mute_states = {false, false , false, false}
 select_held = false
 froze = false
+cue_mode_time = TIME_QTR
 mode = MODE_SEQUENCE
 
 
@@ -65,6 +71,57 @@ end
 
 -- Tools
 tools = {
+  
+  stall = {
+    x = 2,
+    y = 2,
+    modes =  {MODE_SEQUENCE, MODE_CUE},
+    -- TODO
+  },
+  
+  fx1 = {
+    x = 1,
+    y = 3,
+    modes =  {MODE_SEQUENCE, MODE_CUE},
+    -- TODO
+  },
+
+  fx2 = {
+    x = 2,
+    y = 3,
+    modes =  {MODE_SEQUENCE, MODE_CUE},
+    -- TODO
+  },
+
+  fx3 = {
+    x = 3,
+    y = 3,
+    modes =  {MODE_SEQUENCE, MODE_CUE},
+    -- TODO
+  },
+  
+  slow = {
+    x = 1,
+    y = 4,
+    modes = {MODE_SEQUENCE, MODE_CUE},
+    -- TODO
+  },
+
+  fast = {
+    x = 3,
+    y = 4,
+    modes = {MODE_SEQUENCE, MODE_CUE},
+    -- TODO
+  },
+  
+  normal = {
+    x = 2,
+    y = 7,
+    pressed = false,
+    modes = {MODE_CUE},
+    -- TODO
+  },
+  
   loop = {
     x = 3,
     y = 8,
@@ -78,6 +135,7 @@ tools = {
         ph.loop_start = sel.first
         ph.loop_end = sel.last
         if ph.seq_pos > ph.loop_end or ph.seq_pos < ph.loop_start then
+          ph.teleport = true
           ph.seq_pos = ph.loop_start + (offset % (ph.loop_end - ph.loop_start + 1))
         end
       end
@@ -148,7 +206,7 @@ tools = {
     x = 1,
     y = 7,
     pressed = false,
-    modes = {MODE_SEQUENCE, MODE_CUE},
+    modes = {MODE_SEQUENCE},
     apply = function(track, sel)
       if mode == MODE_SEQUENCE then
         if sel == nil then return end
@@ -325,9 +383,10 @@ function advance_playhead(track)
     end
     grid_dirty = true
     return
-  elseif step.lock_pos or step.lock_rate or step.lock_subdivision or looped then
+  elseif step.lock_pos or step.lock_rate or step.lock_subdivision or looped or p.teleport then
     print ("playing step", step.buf_pos, step.rate, step.subdivision)
     engine.playStep(track, step.buf_pos, step.rate, step.subdivision or 0)
+    p.teleport = false
   end
   p.buf_pos = step.buf_pos
   p.rate = step.rate
@@ -453,7 +512,7 @@ function manage_selection(z, pressed, selections, persist)
       current_selection.held[pressed.index] = true
       local sorted = tab.sort(current_selection.held)
       if current_selection.first == current_selection.last and current_selection.first == pressed.index and #sorted == 1 then
-        current_selection[pressed.track] = nil
+        selections[pressed.track] = nil
       else
         current_selection.first = sorted[1]
         current_selection.last = sorted[#sorted]
@@ -494,6 +553,15 @@ function on_loop(track)
       mute_states[track] = false
       engine.level(track, 1)
     end
+    -- calculate the min and max amplitudes
+    local lowestAmp = 1
+    local highestAmp = 0.00001
+    for i=1,129,1 do
+      lowestAmp = math.min(amplitudes[track][i] or 1, lowestAmp)
+      highestAmp = math.max(amplitudes[track][i] or 0.00001, highestAmp)
+    end
+    amplitudes[track].lowest = lowestAmp
+    amplitudes[track].highest = highestAmp
   elseif state == RECORD_ARMED then
     -- starting recording happens instead of playing a slice.
     record_states[track] = RECORD_RECORDING
@@ -522,7 +590,7 @@ function record_pressed(track)
   if state == RECORD_PLAYING then
     record_states[track] = RECORD_MONITORING
     -- start monitoring
-    engine.monitor(track)
+    engine.monitor(track, 1)
   elseif state == RECORD_MONITORING then
     record_states[track] = RECORD_ARMED
   elseif state == RECORD_ARMED then
@@ -539,6 +607,7 @@ function record_longpressed(track)
   local state = record_states[track]
   if state == RECORD_MONITORING then
     record_states[track] = RECORD_PLAYING
+    engine.monitor(track, 0)
     -- TODO: stop monitoring
   elseif state == RECORD_ARMED then
     record_states[track] = RECORD_SOS
@@ -564,8 +633,13 @@ function g.key(x, y, z)
     return
   end
   
+  -- Cue-mode time selector
+  if mode == MODE_CUE and y == 8 and x <= 3 then
+    cue_mode_time = x
+  end
+  
   -- Select
-  if z == 1 and x == 1 and y == 8 then
+  if z == 1 and x == 1 and y == 8 and mode == MODE_SEQUENCE then
     froze = false
     select_held = true
     for track=1,4,1 do
@@ -579,7 +653,7 @@ function g.key(x, y, z)
     print("froze is now", froze)
     grid_dirty = true
   end
-  if z == 0 and x == 1 and y == 8 then
+  if z == 0 and x == 1 and y == 8 and mode == MODE_SEQUENCE then
     if not froze then
       print("deselect")
       for track=1,4,1 do
@@ -709,7 +783,13 @@ function grid_redraw()
     end
   end
   -- Tools
-  g:led(1, 8, select_held and ACTIVE or (select_persist and SELECTED or INACTIVE))
+  if mode == MODE_SEQUENCE then
+    g:led(1, 8, select_held and ACTIVE or (select_persist and SELECTED or INACTIVE))
+  elseif mode == MODE_CUE then
+    for x=1,3,1 do
+      g:led(x, 8, x == cue_mode_time and SELECTED or INACTIVE)
+    end
+  end
   for k, v in pairs(tools) do
     if tab.contains(v.modes, mode) then
       g:led(v.x, v.y, v.pressed and ACTIVE or INACTIVE)
@@ -758,7 +838,11 @@ function grid_redraw()
       if mode == MODE_CUE then
         local amp1 = amplitudes[step.track][mul_but_oneindex(step.index, 2)] or 0.000001
         local amp2 = amplitudes[step.track][mul_but_oneindex(step.index, 2) + 1] or 0.000001
-        level = math.max(level, 10 + math.floor(math.log(amp1+amp2)/math.log(2)), 1)
+        local highest = amplitudes[step.track].highest or 1
+        local lowest = amplitudes[step.track].lowest or 0.00001
+        local range = math.log(highest/lowest)
+        local logAmp = math.log( (amp1+amp2) / (2*highest) )
+        level = math.max(level, 10 + math.floor(10*logAmp/range), 1)
       end
       if selection ~= nil then
         if step.index >= selection.first and step.index <= selection.last then

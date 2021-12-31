@@ -55,9 +55,16 @@ NydlTrack {
 		]);
 	}
 
-	monitor {
-		if (monitorSynth == nil, {
+	monitor { |level|
+		if (level == 0, {
+			if (monitorSynth != nil, {
+				monitorSynth.set(\gate, 0);
+				monitorSynth = nil;
+			});
+		}, {
+			if (monitorSynth == nil, {
 			monitorSynth = Synth(\monitor, [out: out]);
+			});
 		});
 	}
 
@@ -129,7 +136,11 @@ Engine_NotYourDreamLooper : CroneEngine {
 			var bufPlay = PlayBuf.ar(2, buf, rate: 1.0, startPos: start, loop: 1.0);
 			var ampPulse = Impulse.kr(tempo*2/division);
 			var ampCounter = PulseCount.kr(ampPulse);
-			SendReply.kr(ampPulse, '/recordAmplitude', [track, ampCounter-1, Amplitude.kr(Mix.ar(bufPlay+in)/2, attackTime: 0.01, releaseTime: division)]);
+			SendReply.kr(
+				(ampCounter > 1).if(ampPulse, 0),
+				'/recordAmplitude',
+				[track, ampCounter-1+(2*pos), Amplitude.kr(Mix.ar((llevel*bufPlay)+in)/2, attackTime: 0.01, releaseTime: division)]
+			);
 			Out.ar(out, llevel*env*bufPlay);
 			RecordBuf.ar(
 				in,
@@ -162,10 +173,11 @@ Engine_NotYourDreamLooper : CroneEngine {
 			})
 		});
 
-		this.addCommand("monitor", "i", { |msg|
+		this.addCommand("monitor", "ii", { |msg|
 			var track = msg[1].asInteger - 1;
+			var level = msg[2].asInteger;
 			if (tracks != nil, {
-				tracks[track].monitor;
+				tracks[track].monitor(level);
 			});
 		});
 
