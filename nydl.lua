@@ -47,6 +47,31 @@ cue_mode_time = TIME_QTR
 mode = MODE_SEQUENCE
 
 
+function apply_rate(rate, track, sel)
+  if sel == nil then return end
+  local seq = sequence[track]
+  local landmark = seq[sel.first].buf_pos
+  local distance = 0
+  for i=sel.first,sel.last,1 do
+    seq[i].rate = rate
+    seq[i].lock_rate = false
+    if seq[i].lock_pos then
+      landmark = seq[i].buf_pos
+      distance = 0
+    else
+      seq[i].buf_pos = landmark + (rate * distance)
+      distance = distance + 1
+    end
+  end
+  seq[sel.first].lock_rate = true
+  
+  if sel.last < 64 then
+    seq[sel.last + 1].lock_rate = true
+    seq[sel.last + 1].lock_pos = true
+  end 
+  
+end
+
 function apply_stutter(div, track, sel)
   if sel == nil then return end
   local seq = sequence[track]
@@ -104,14 +129,18 @@ tools = {
     x = 1,
     y = 4,
     modes = {MODE_SEQUENCE, MODE_CUE},
-    -- TODO
+    apply = function (track, sel)
+      apply_rate(0.5, track, sel)
+    end,
   },
 
   fast = {
     x = 3,
     y = 4,
     modes = {MODE_SEQUENCE, MODE_CUE},
-    -- TODO
+    apply = function (track, sel)
+      apply_rate(2.0, track, sel)
+    end,
   },
   
   normal = {
@@ -225,6 +254,14 @@ tools = {
           seq[i].lock_pos = false
           seq[i].lock_rate = false
           seq[i].lock_subdivision = false
+          print("cut", i)
+          tab.print(seq[i])
+        end
+        if pattern_buffer[1].buf_pos ~= seq[sel.first].buf_pos then
+          seq[sel.first].lock_pos = true
+        end
+        if sel.last < 64 and seq[sel.last].buf_pos ~= pattern_buffer[#pattern_buffer].buf_pos then
+          seq[sel.last + 1].lock_pos = true
         end
       end
     end,
@@ -292,16 +329,18 @@ tools = {
 
 tools_by_coordinate = {}
 for k, v in pairs(tools) do
-  x_0 = v.x - 1
-  y_0 = v.y - 1
-  local idx = x_0*8 + y_0
-  tools_by_coordinate[idx] = k
+  for i, m in ipairs(v.modes) do
+    x_0 = v.x - 1
+    y_0 = v.y - 1
+    local idx = x_0*8 + y_0 + m*256
+    tools_by_coordinate[idx] = k
+  end
 end
 
-function lookup_tool(x, y)
+function lookup_tool(x, y, m)
   x_0 = x - 1
   y_0 = y - 1 
-  local idx = x_0*8 + y_0
+  local idx = x_0*8 + y_0 + m*256
   local key = tools_by_coordinate[idx]
   if key ~= nil then
     return tools[key]
@@ -384,7 +423,7 @@ function advance_playhead(track)
     grid_dirty = true
     return
   elseif step.lock_pos or step.lock_rate or step.lock_subdivision or looped or p.teleport then
-    print ("playing step", step.buf_pos, step.rate, step.subdivision)
+    -- print ("playing step", step.buf_pos, step.rate, step.subdivision)
     engine.playStep(track, step.buf_pos, step.rate, step.subdivision or 0)
     p.teleport = false
   end
@@ -684,7 +723,7 @@ function g.key(x, y, z)
     end
   end
   -- Tools
-  local tool = lookup_tool(x, y)
+  local tool = lookup_tool(x, y, mode)
   if tool ~= nil then
     if tab.contains(tool.modes, mode) then
       if z == 1 then
