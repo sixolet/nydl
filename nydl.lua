@@ -6,17 +6,18 @@ g = grid.connect()
 
 -- Brightnesses
 OFF = 0
+BACKGROUND = 1
 IN_LOOP = 3
 IN_LOOP_SECTION = 2
-INACTIVE = 4
+INACTIVE = 6
 INTERESTING = 12
-SELECTED = 8
+SELECTED = 11
 ACTIVE = 15
 
 -- Modes
-MODE_SOUND = 1
-MODE_SEQUENCE = 2
-MODE_CUE = 3
+-- MODE_SOUND = 1
+MODE_SEQUENCE = 1
+MODE_CUE = 2
 
 -- Record states
 RECORD_PLAYING = 1
@@ -27,6 +28,7 @@ RECORD_SOS = 5
 
 -- Global script data
 sequence = { {}, {}, {}, {} }
+amplitudes = { {}, {}, {}, {} }
 pattern_buffer = nil
 playheads = {}
 step_selections = {nil, nil, nil, nil}
@@ -36,7 +38,30 @@ record_timers = {nil, nil, nil, nil}
 mute_states = {false, false , false, false}
 select_held = false
 froze = false
-mode = MODE_SOUND
+mode = MODE_SEQUENCE
+
+
+function apply_stutter(div, track, sel)
+  if sel == nil then return end
+  local seq = sequence[track]
+  local pos = seq[sel.first].buf_pos
+  local rate = seq[sel.first].rate
+  local numerator = sel.last - sel.first + 1
+  for i=sel.first,sel.last,1 do
+    seq[i].buf_pos = pos
+    seq[i].rate = rate
+    seq[i].subdivision = numerator/div
+    seq[i].lock_pos = false
+    seq[i].lock_rate = false
+    seq[i].lock_subdivision = false
+  end
+  seq[sel.first].lock_pos = true
+  seq[sel.first].lock_rate = true
+  seq[sel.first].lock_subdivision = true
+  if sel.last < 64 then
+    seq[sel.last + 1].lock_subdivision = true
+  end
+end
 
 -- Tools
 tools = {
@@ -58,11 +83,72 @@ tools = {
       end
     end,
   },
+  stutter2 = {
+    x = 1,
+    y = 5,
+    pressed = false,
+    modes = {MODE_SEQUENCE, MODE_CUE},
+    apply = function(track, sel)
+      apply_stutter(2, track, sel)
+    end,
+  },
+  stutter3 = {
+    x = 2,
+    y = 5,
+    pressed = false,
+    modes = {MODE_SEQUENCE, MODE_CUE},
+    apply = function(track, sel)
+      apply_stutter(3, track, sel)
+    end,
+  },
+  stutter4 = {
+    x = 3,
+    y = 5,
+    pressed = false,
+    modes = {MODE_SEQUENCE, MODE_CUE},
+    apply = function(track, sel)
+      apply_stutter(4, track, sel)
+    end,
+  },
+  reverse = {
+    x = 2,
+    y = 6,
+    pressed = false,
+    modes = {MODE_SEQUENCE, MODE_CUE},
+    apply = function(track, sel)
+      if mode == MODE_SEQUENCE then
+        if sel == nil then return end
+        local seq = sequence[track]
+        -- Copy to the pattern buffer, then clear to defaults
+        local buffer = {}
+        for i=sel.first,sel.last,1 do
+          local copied = {}
+          for k, v in pairs(seq[i]) do
+            copied[k] = v
+          end
+          copied.rate = -1 * copied.rate
+          table.insert(buffer, copied)
+        end
+        local p = 1
+        for i=sel.last,sel.first,-1 do
+          for k, v in pairs(buffer[p]) do
+            seq[i][k] = v
+          end
+          p = p + 1
+        end
+        seq[sel.first].lock_rate = true
+        seq[sel.first].lock_subdivision = true
+        if sel.last < 64 then
+          seq[sel.last + 1].lock_rate = true
+        end        
+      end
+    end,
+  },
   cut = {
     x = 1,
     y = 7,
     pressed = false,
-    modes = {MODE_SOUND, MODE_SEQUENCE, MODE_CUE},
+    modes = {MODE_SEQUENCE, MODE_CUE},
     apply = function(track, sel)
       if mode == MODE_SEQUENCE then
         if sel == nil then return end
@@ -89,7 +175,7 @@ tools = {
     x = 2,
     y = 7,
     pressed = false,
-    modes = {MODE_SOUND, MODE_SEQUENCE},
+    modes = {MODE_SEQUENCE},
     apply = function(track, sel)
       if mode == MODE_SEQUENCE then
         if sel == nil then return end
@@ -114,7 +200,7 @@ tools = {
     x = 3,
     y = 7,
     pressed = false,
-    modes = {MODE_SOUND, MODE_SEQUENCE},
+    modes = {MODE_SEQUENCE},
     apply = function(track, sel)
       if mode == MODE_SEQUENCE and pattern_buffer ~= nil then
         if sel == nil then return end
@@ -241,7 +327,7 @@ function advance_playhead(track)
     return
   elseif step.lock_pos or step.lock_rate or step.lock_subdivision or looped then
     print ("playing step", step.buf_pos, step.rate, step.subdivision)
-    engine.playStep(track, step.buf_pos, step.rate, step.subdivision or 64.0)
+    engine.playStep(track, step.buf_pos, step.rate, step.subdivision or 0)
   end
   p.buf_pos = step.buf_pos
   p.rate = step.rate
@@ -297,8 +383,8 @@ function step_for_button(x, y)
 end
 
 function section_for_button(x, y)
-  if x == 7 or x == 8 then
-    local section = (x-6) + 2*((y-1)%2) 
+  if x == 6 or x == 7 then
+    local section = (x-5) + 2*((y-1)%2) 
     return {
       track = div_but_oneindex(y, 2),
       section = section,
@@ -467,15 +553,11 @@ end
 function g.key(x, y, z)
   -- mode selector
   if z == 1 and x == 1 and y == 1 then
-    mode = MODE_SOUND
-    grid_dirty = true
-    return
-  end
-  if z == 1 and x == 2 and y == 1 then
     mode = MODE_SEQUENCE
     grid_dirty = true
     return
   end
+
   if z == 1 and x == 3 and y == 1 then
     mode = MODE_CUE
     grid_dirty = true
@@ -509,7 +591,7 @@ function g.key(x, y, z)
   end  
   
   -- Record
-  if x == 6 and y%2 == 1 then
+  if x == 5 and y%2 == 1 then
     local track = div_but_oneindex(y, 2)
     if z == 1 then
       record_press_initiated(track)
@@ -518,7 +600,7 @@ function g.key(x, y, z)
     end
   end  
   -- Mute
-  if z == 1 and x == 6 and y%2 == 0 then
+  if z == 1 and x == 5 and y%2 == 0 then
     local track = div_but_oneindex(y, 2)
     mute_states[track] = not mute_states[track]
     if mute_states[track] then
@@ -557,27 +639,21 @@ function g.key(x, y, z)
   manage_selection(z, pressed, step_selections, select_held)
   if pressed ~= nil and select_held then froze = true end
 
-  if mode == MODE_SOUND then
-    sound_key(x, y, z)
-  elseif mode == MODE_SEQUENCE then
-    sequence_key(x, y, z)
-  elseif mode == MODE_CUE then
-    cue_key(x, y, z)
+end
+
+function osc_in(path, args, from)
+  print("osc", path, args[1], args[2], args[3], args[4], from)
+  if path == "/amplitude" then
+    local track = args[1]
+    local slice = args[2]
+    local amp = args[3]
+    if amplitudes[track] ~= nil then
+      amplitudes[track][slice] = amp
+    end
   end
 end
 
-function sound_key(x, y, z)
-end
-
-function sequence_key(x, y, z)
-end
-
-function cue_key(x, y, z)
-  local step = step_for_button(x, y)
-  if step ~= nil then
-    print(step.step)
-  end
-end
+osc.event = osc_in
 
 function grid_mini_redraw()
   -- Button animations
@@ -596,7 +672,7 @@ function grid_mini_redraw()
   
   -- Per track
   for track=1,4,1 do
-    local record_x = 6
+    local record_x = 5
     local record_y = mul_but_oneindex(track, 2)
     local state = record_states[track]
     if state == RECORD_PLAYING then
@@ -621,8 +697,7 @@ function grid_redraw()
   g:all(0)
   
   -- Modes
-  g:led(1, 1, mode == MODE_SOUND and SELECTED or INACTIVE)
-  g:led(2, 1, mode == MODE_SEQUENCE and SELECTED or INACTIVE)
+  g:led(1, 1, mode == MODE_SEQUENCE and SELECTED or INACTIVE)
   g:led(3, 1, mode == MODE_CUE and SELECTED or INACTIVE)
 
   -- Select
@@ -641,13 +716,14 @@ function grid_redraw()
     end
   end
   -- Sections
-  for x=7,8,1 do
+  for x=6,7,1 do
     for y=1,8,1 do
       local section = section_for_button(x, y)
       local selection = section_selections[section.track]
       local playhead = playheads[section.track]
       local loop_start_section = div_but_oneindex(playhead.loop_start, 16)
       local loop_end_section = div_but_oneindex(playhead.loop_end, 16)
+      g:led(x, y, BACKGROUND)
       if mode == MODE_SEQUENCE and section.index >= loop_start_section and section.index <= loop_end_section then
         g:led(x, y, IN_LOOP_SECTION)
       end
@@ -659,7 +735,7 @@ function grid_redraw()
       if mode == MODE_SEQUENCE and section.index == div_but_oneindex(playhead.seq_pos, 16) then
         g:led(x, y, ACTIVE)
       end
-      if (mode == MODE_SOUND or mode == MODE_CUE) and section.index == div_but_oneindex(playhead.buf_pos, 16) then
+      if mode == MODE_CUE and section.index == div_but_oneindex(playhead.buf_pos, 16) then
         g:led(x, y, ACTIVE)
       end
     end
@@ -670,20 +746,32 @@ function grid_redraw()
       local step = step_for_button(x, y)
       local selection = step_selections[step.track]
       local playhead = playheads[step.track]
-      if mode == MODE_SEQUENCE and step.index >= playhead.loop_start and step.index <= playhead.loop_end then
-        g:led(x, y, IN_LOOP)
+      local level = BACKGROUND
+      if mode == MODE_SEQUENCE then
+        local step_data = sequence[step.track][step.index]
+        if step_data.lock_pos or step_data.lock_rate or step_data.lock_subdivision then
+          level = INTERESTING
+        elseif step.index >= playhead.loop_start and step.index <= playhead.loop_end then
+          level = IN_LOOP
+        end
+      end
+      if mode == MODE_CUE then
+        local amp1 = amplitudes[step.track][mul_but_oneindex(step.index, 2)] or 0.000001
+        local amp2 = amplitudes[step.track][mul_but_oneindex(step.index, 2) + 1] or 0.000001
+        level = math.max(level, 10 + math.floor(math.log(amp1+amp2)/math.log(2)), 1)
       end
       if selection ~= nil then
         if step.index >= selection.first and step.index <= selection.last then
-          g:led(x, y, SELECTED)
+          level = math.max(level, SELECTED)
         end
       end
       if mode == MODE_SEQUENCE and step.index == playhead.seq_pos then
-        g:led(x, y, ACTIVE)
+        level = ACTIVE
       end
-      if (mode == MODE_SOUND or mode == MODE_CUE) and step.index == playhead.buf_pos then
-        g:led(x, y, ACTIVE)
+      if mode == MODE_CUE and step.index == playhead.buf_pos then
+        level = ACTIVE
       end
+      g:led(x, y, level)
     end
   end
 end
