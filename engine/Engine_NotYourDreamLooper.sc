@@ -1,25 +1,27 @@
 // NotYourDreamLooper can play slices of a buffer and record to it.
 
 NydlTrack {
-	var <server, <track, <division, <sendBus, <buffer, <bufferTempo, <synth, <monitorSynth, <recording, <level, <toFx, <out, <fx;
+	var <server, <track, <division, <sendBus, <buffer, <bufferTempo, <synth, <monitorSynth, <recording, <level, <toFx, <fx, <fxControls;
 
 	*new { |server, track, division, sendBus, filename=nil, fileTempo=nil, fileBeats=nil|
 		var buffer, bufferTempo;
 		var tempo = TempoClock.tempo;
-		var toFx = Bus.audio(server: server, numChannels: 2);
-		var out = toFx; // Bus.audio(server: server, numChannels: 2);
-		var fx = NodeProxy.new(server, \audio!4, 2);
-		fx[0].source = toFx;
-		fx[1].source = \decimateFx;
-		fx[2].source = \svfFx;
-		fx[3].source = \sendFx;
-		fx.do { |f, i|
-			f.set(\send, sendBus);
-			if(i > 0, {
-				fx[i-1] <>> f;
-			});
-		};
-		//fx[3].play(out, 2);
+		var toFx = 4.collect {Bus.audio(server: server, numChannels: 2)};
+		var fx = nil!3;
+		var fxControls = [(), (), ()];
+
+		fx[0] = Synth(\decimateFx, [
+			in: toFx[0],
+			out: toFx[1],
+		], addAction: \addToTail);
+		fx[1] = Synth(\svfFx, [
+			in: toFx[1],
+			out: toFx[2],
+		], target: fx[0], addAction: \addAfter);
+		fx[2] = Synth(\sendFx, [
+			in: toFx[2],
+			out: toFx[3],
+		], target: fx[1], addAction: \addAfter);
 
 		if (filename != nil, {
 			try {
@@ -35,14 +37,24 @@ NydlTrack {
 			bufferTempo = tempo;
 		});
 		^super.newCopyArgs(
-			server, track, division, sendBus, buffer, bufferTempo, nil, nil, false, 1, toFx, out, fx);
+			server, track, division, sendBus, buffer, bufferTempo, nil, nil, false, 1, toFx, fx, fxControls);
+	}
+
+	out {
+		^toFx[3];
 	}
 
 	free {
 		if (synth != nil, {synth.free});
 		if (monitorSynth != nil, {monitorSynth.free});
 		buffer.free;
-		out.free;
+		fx.do {|x| x.free};
+		toFx.do {|x| x.free};
+	}
+
+	setFx { |fxIdx, id, value|
+		fxControls[fxIdx][id] = value;
+		fx[fxIdx].set(id, value);
 	}
 
 	playStep { |pos, rate, loop|
@@ -56,7 +68,7 @@ NydlTrack {
 		});
 		// Post << "Playing step with loop " << (loop > 0).if(TempoClock.tempo/(loop*division), 0) << "\n";
 		synth = Synth(\playStep, [
-			out: toFx,
+			out: toFx[0],
 			buf: buffer,
 			bufTempo: bufferTempo,
 			clockTempo: TempoClock.tempo,
@@ -77,7 +89,7 @@ NydlTrack {
 			});
 		}, {
 			if (monitorSynth == nil, {
-			monitorSynth = Synth(\monitor, [out: toFx]);
+				monitorSynth = Synth(\monitor, [out: toFx[0]]);
 			});
 		});
 	}
@@ -88,7 +100,7 @@ NydlTrack {
 		});
 		recording = true;
 		synth = Synth(\record, [
-			out: toFx,
+			out: toFx[0],
 			buf: buffer,
 			tempo: TempoClock.tempo,
 			pos: pos,
@@ -120,11 +132,9 @@ Engine_NotYourDreamLooper : CroneEngine {
 		tracks = 4.collect { |i|
 			NydlTrack.new(Server.default, i+1, 0.25, sendBus, nil, nil, nil);
 		};
-		Post << "here\n";
 		{
 			Mix.ar(tracks.collect({|t| In.ar(t.out, 2)}) ++ [sendChain.last.ar(2)]).tanh
-		}.play;
-		Post << "there\n";
+		}.play(addAction: \addToTail);
 	}
 
 	alloc {
@@ -138,20 +148,20 @@ Engine_NotYourDreamLooper : CroneEngine {
 		};
 		sendChain[0] <>> sendChain[1];
 
-		SynthDef.new(\svfFx, { |out, level, cutoff=1000, res=0.1, low=0, band=1, high=0|
-			var in = \in.ar(0!2);
-			Out.ar(out, level.if(in, SVF.ar(in, cutoff, res, low, band, high)));
+		SynthDef.new(\svfFx, { |in, out, level, cutoff=1000, res=0.1, low=0, band=1, high=0|
+			var i = In.ar(in, 2);
+			Out.ar(out, level.if(SVF.ar(i, cutoff, res, low, band, high), i));
 		}).add;
 
-		SynthDef.new(\decimateFx, { |out, level, rate=30000, smooth=0.5|
-			var in = \in.ar(0!2);
-			Out.ar(out, level.if(in, SmoothDecimator.ar(in, rate, smooth)));
+		SynthDef.new(\decimateFx, { |in, out, level, rate=1000, smooth=0.2|
+			var i = In.ar(in, 2);
+			Out.ar(out, level.if(SmoothDecimator.ar(i, rate, smooth), i));
 		}).add;
 
-		SynthDef.new(\sendFx, {|out, level, send|
-			var in = \in.ar(0!2);
-			Out.ar(send, level*in);
-			Out.ar(out, in);
+		SynthDef.new(\sendFx, {|in, out, level, send|
+			var i = In.ar(in, 2);
+			Out.ar(send, level*i);
+			Out.ar(out, i);
 		}).add;
 
 		SynthDef.new(\playStep, { |out, buf, bufTempo, clockTempo, pos, division, rate=1, loop=0, gate=1, level=1|
@@ -254,6 +264,17 @@ Engine_NotYourDreamLooper : CroneEngine {
 			if (tracks == nil, {
 				this.initTracks;
 			});
+		});
+
+		this.addCommand("setFx", "iisf", { |msg|
+			var track = msg[1].asInteger - 1;
+			var fxIdx = msg[2].asInteger - 1;
+			var control = msg[3].asSymbol;
+			var value = msg[4].asFloat;
+			if (tracks == nil, {
+				this.initTracks;
+			});
+			tracks[track].setFx(fxIdx, control, value);
 		});
 	}
 

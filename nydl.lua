@@ -94,6 +94,28 @@ function apply_stutter(div, track, sel)
   end
 end
 
+function apply_fx(idx, track, sel)
+  if sel == nil then return end
+  print("track", track)
+  tab.print(sel)
+  local seq = sequence[track]
+  local attr = "fx_"..idx.."_level"
+  local was = seq[sel.first][attr]
+  for i=sel.first,sel.last,1 do
+    seq[i][attr] = nil
+  end
+  if was ~= nil and was > 0 then 
+    seq[sel.first][attr] = 0
+  else
+    seq[sel.first][attr] = 1
+    if sel.last < 64 then
+      seq[sel.last + 1][attr] = 0
+    elseif sel.first ~= 1 then
+      seq[1][attr] = 0
+    end
+  end
+end
+
 -- Tools
 tools = {
   
@@ -101,28 +123,33 @@ tools = {
     x = 2,
     y = 2,
     modes =  {MODE_SEQUENCE, MODE_CUE},
-    -- TODO
   },
   
   fx1 = {
     x = 1,
     y = 3,
     modes =  {MODE_SEQUENCE, MODE_CUE},
-    -- TODO
+    apply = function (track, sel)
+      apply_fx(1, track, sel)
+    end,
   },
 
   fx2 = {
     x = 2,
     y = 3,
     modes =  {MODE_SEQUENCE, MODE_CUE},
-    -- TODO
+    apply = function (track, sel)
+      apply_fx(2, track, sel)
+    end,
   },
 
   fx3 = {
     x = 3,
     y = 3,
     modes =  {MODE_SEQUENCE, MODE_CUE},
-    -- TODO
+    apply = function (track, sel)
+      apply_fx(3, track, sel)
+    end,
   },
   
   slow = {
@@ -248,6 +275,7 @@ tools = {
             copied[k] = v
           end
           table.insert(pattern_buffer, copied)
+          seq[i] = {}
           seq[i].buf_pos = i
           seq[i].rate = 1
           seq[i].subdivision = nil
@@ -284,10 +312,10 @@ tools = {
           end
           table.insert(pattern_buffer, copied)
         end
-        print("pattern buffer")
-        for i, p in ipairs(pattern_buffer) do
-          tab.print(p)
-        end
+        -- print("pattern buffer")
+        -- for i, p in ipairs(pattern_buffer) do
+        --   tab.print(p)
+        -- end
       end      
     end,
   },
@@ -427,6 +455,15 @@ function advance_playhead(track)
     engine.playStep(track, step.buf_pos, step.rate, step.subdivision or 0)
     p.teleport = false
   end
+  for k, v in pairs(step) do
+    if util.string_starts(k, "fx_") then
+      local parts = tab.split(k, "_")
+      local idx = tonumber(parts[2])
+      local attr = parts[3]
+      -- print("fx", track, idx, attr, v)
+      engine.setFx(track, idx, attr, v)
+    end
+  end  
   p.buf_pos = step.buf_pos
   p.rate = step.rate
   grid_dirty = true
