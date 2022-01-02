@@ -429,6 +429,7 @@ for track=1,4,1 do
     rate = 1,
     buf_pos = 64,
     actual_buf_pos = 64,
+    actual_rate = 1,
     loop_start = 1, -- loop within sequence
     loop_end = 64,  -- loop within sequence
     division = 0.25, -- beats per step in sequence
@@ -444,52 +445,6 @@ for track=1,4,1 do
       lock_subdivision = false,
     }
   end
-end
-
-function get_next(pos, prev, seq_next)
-  -- The default next step if our parameters don't change. A stuttered step keeps resetting; otherwise advance
-  local any_tool = false;
-  local any_new_released = false;
-  for k, tool in pairs(tools) do
-    if tab.contains(tool.modes, mode) and tool.pressed then
-      any_tool = true
-    end
-    if tab.contains(tool.modes, mode) and tool.new_released then
-      any_new_released = true
-    end
-  end
-  if not any_tool then
-    if any_new_released then
-      local ret = {}
-      for k, v in pairs(seq_next) do
-        ret[k] = v
-      end
-      ret.lock_pos = true
-      ret.lock_rate = true
-      return ret
-    end
-    return seq_next
-  end
-  local ret = {
-    buf_pos = (prev.subdivision == nil) and (prev.buf_pos) or (prev.buf_pos + prev.rate),
-    rate = prev.rate,
-    subdivision = prev.subdivision,
-    lock_pos = false,
-    lock_rate = false,
-    lock_subdivision = false,
-  }
-  -- for k, tool in pairs(tools) do
-  --   if tab.contains(tool.modes, mode) then
-  --     if tool.new_pressed and tool.onPress ~= nil then
-  --       ret = tool.onPress(ret, pos)
-  --       tool.new_pressed = false
-  --     elseif tool.new_released and tool.onRelease ~= nil then
-  --       ret = tool.onRelease(ret, pos)
-  --       tool.new_released = false
-  --     end
-  --   end
-  -- end
-  return ret
 end
 
 function active_section(track)
@@ -527,9 +482,6 @@ function advance_playhead(track)
     grid_dirty = true
     return
   end
-  -- if mode == MODE_CUE then
-  --   step = get_next(p.seq_pos, prev_step, step)
-  -- end
   if mode == MODE_CUE and track_cued(track) then
     -- pass
   elseif step.lock_pos or step.lock_rate or step.lock_subdivision or looped or p.teleport or was_cued[track] then
@@ -665,6 +617,7 @@ function manage_selection(z, pressed, selections, persist)
         held = held,
         persist = persist,
       }
+      current_selection = selections[pressed.track]
       grid_dirty = true
       apply_tools = true
     elseif z == 1 then
@@ -689,15 +642,20 @@ function manage_selection(z, pressed, selections, persist)
       end
       grid_dirty = true
     end
-    if selections[pressed.track] ~= nil and apply_tools then
+    if selections[pressed.track] ~= nil and apply_tools and mode == MODE_SEQUENCE then
       -- Apply any tools to the new selection
       for k, tool in pairs(tools) do
-        if tool.pressed and tool.apply ~= nil and mode == MODE_SEQUENCE then
+        if tool.pressed and tool.apply ~= nil then
           tool.apply(pressed.track, active_selection(pressed.track))
         end
       end
-    else
-      -- Pass
+    elseif not persist and selections[pressed.track] ~= nil and apply_tools and mode == MODE_CUE and cue_record_states[pressed.track] ~= MODE_PLAYING then
+      local loop_len = 0
+      if current_selection.last ~= current_selection.first then
+        loop_len = current_selection.last - current_selection.first + 1
+      end
+      was_cued[pressed.track] = true
+      engine.playStep(pressed.track, current_selection.first, playheads[pressed.track].actual_rate, loop_len)
     end
   end
 end
@@ -953,8 +911,11 @@ function osc_in(path, args, from)
   elseif path == "/report" then
     local track = args[1]
     local pos = args[2]
+    local rate = args[3]
+    local loop = args[4]
     local ph = playheads[track]
     ph.actual_buf_pos = pos
+    ph.actual_rate = rate
     grid_dirty = true
   end
 end
