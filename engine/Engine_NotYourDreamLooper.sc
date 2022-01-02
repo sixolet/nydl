@@ -57,9 +57,14 @@ NydlTrack {
 		fx[fxIdx].set(id, value);
 	}
 
+	setSynth { |id, value|
+		synth.set(id, value)
+	}
+
 	playStep { |pos, rate, loop|
 		if (synth != nil, {
 			synth.set(\gate, 0);
+			// "stopping % id %\n".postf(synth, synth.nodeID);
 		});
 		if (recording && (monitorSynth != nil), {
 			monitorSynth.set(\gate, 0);
@@ -77,8 +82,10 @@ NydlTrack {
 			rate: rate,
 			loop: loop,
 			gate: 1,
-			level: level
+			level: level,
+			track: track,
 		]);
+		// "playing % id %\n".postf(synth, synth.nodeID);
 	}
 
 	monitor { |level|
@@ -122,7 +129,7 @@ NydlTrack {
 
 Engine_NotYourDreamLooper : CroneEngine {
 	classvar luaOscPort = 10111;
-	var <tracks, <ampDef, <sendBus, <sendChain;
+	var <tracks, <ampDef, <reportDef, <sendBus, <sendChain;
 
 	*new { arg context, doneCallback;
 		^super.new(context, doneCallback);
@@ -164,12 +171,16 @@ Engine_NotYourDreamLooper : CroneEngine {
 			Out.ar(out, i);
 		}).add;
 
-		SynthDef.new(\playStep, { |out, buf, bufTempo, clockTempo, pos, division, rate=1, loop=0, gate=1, level=1|
-			var r = rate*(bufTempo/clockTempo)*BufRateScale.kr(buf);
+		SynthDef.new(\playStep, { |out, buf, bufTempo, clockTempo, pos, division, rate=1, loop=0, gate=1, level=1, track=1, forward=1|
+			var r = forward*rate*(bufTempo/clockTempo)*BufRateScale.kr(buf);
 			var stepSize = BufRateScale.kr(buf) * SampleRate.ir  * (division/bufTempo);
 			var start = (rate > 0).if(pos*stepSize, (pos-rate.reciprocal)*stepSize); // When reversed, start at the end of the step
-			var snd = PlayBuf.ar(2, buf, r, Impulse.kr((loop > 0).if(clockTempo/(loop*division), 0)), start, 0.0, Done.none);
+			var reset = Impulse.kr((loop > 0).if(clockTempo/(loop*division), 0));
+			var report = Impulse.kr(clockTempo*3/division);
+			var phasor = Phasor.ar(reset, r, 0, 64*stepSize, start);
+			var snd = BufRd.ar(2, buf, phasor);
 			snd = EnvGen.kr(fadeEnv, gate, doneAction: Done.freeSelf) * snd;
+			SendReply.kr(gate*report, '/report', [track, phasor/stepSize, rate, loop]);
 			snd = level.lag(0.01) * snd;
 			Out.ar(out, snd);
 		}).add;
@@ -185,6 +196,7 @@ Engine_NotYourDreamLooper : CroneEngine {
 			var start = SampleRate.ir  * (pos*division/tempo);
 			var env = EnvGen.kr(fadeEnv, gate, doneAction: Done.freeSelf);
 			var llevel = level.lag(0.01);
+
 			var bufPlay = PlayBuf.ar(2, buf, rate: 1.0, startPos: start, loop: 1.0);
 			var ampPulse = Impulse.kr(tempo*2/division);
 			var ampCounter = PulseCount.kr(ampPulse);
@@ -214,6 +226,13 @@ Engine_NotYourDreamLooper : CroneEngine {
 			luaOscAddr.sendMsg("/amplitude", track, slice, amp);
 		}, '/recordAmplitude');
 
+		ampDef = OSCdef.new(\report, { |msg, time|
+			var track = msg[3].asFloat.asInteger;
+			var pos = msg[4].asFloat;
+			var rate = msg[5].asFloat;
+			var loop = msg[6].asFloat;
+			luaOscAddr.sendMsg("/report", track, pos, rate, loop);
+		}, '/report');
 
 		this.addCommand("playStep", "ifff", { |msg|
 			var track = msg[1].asInteger - 1;
@@ -275,6 +294,16 @@ Engine_NotYourDreamLooper : CroneEngine {
 				this.initTracks;
 			});
 			tracks[track].setFx(fxIdx, control, value);
+		});
+
+		this.addCommand("setSynth", "isf", { |msg|
+			var track = msg[1].asInteger - 1;
+			var control = msg[2].asSymbol;
+			var value = msg[3].asFloat;
+			if (tracks == nil, {
+				this.initTracks;
+			});
+			tracks[track].setSynth(control, value);
 		});
 	}
 
