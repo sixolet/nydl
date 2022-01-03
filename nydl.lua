@@ -25,6 +25,7 @@ RECORD_MONITORING = 2
 RECORD_ARMED = 3
 RECORD_RECORDING = 4
 RECORD_SOS = 5
+RECORD_RESAMPLING = 6
 
 -- Cue-mode time selection
 TIME_QTR = 1
@@ -55,6 +56,8 @@ select_held = false
 froze = false
 cue_mode_time = TIME_QTR
 mode = MODE_SEQUENCE
+
+cached_tempo = nil
 
 
 function apply_rate(rate, track, sel)
@@ -705,17 +708,26 @@ end
 function record_pressed(track)
   local state = record_states[track]
   if state == RECORD_PLAYING then
-    record_states[track] = RECORD_MONITORING
     -- start monitoring
     if mode == MODE_SEQUENCE then
       engine.monitor(track, 1)
+      local ph = playheads[track]
+      if math.abs(ph.buffer_tempo - clock.get_tempo()) > 0.3 then
+        engine.resample(track)
+        record_states[track] = RECORD_RESAMPLING
+        return -- Avoid getting set to RECORD_MONITORING
+      end
     end
+    record_states[track] = RECORD_MONITORING
+
   elseif state == RECORD_MONITORING then
     record_states[track] = RECORD_ARMED
   elseif state == RECORD_ARMED then
     -- pass ?
   elseif state == RECORD_RECORDING then
     -- pass ?
+  elseif state == RECORD_RESAMPLING then
+    -- pass
   elseif state == RECORD_SOS then
     -- TODO: Stop recording
     record_states[track] = RECORD_MONITORING
@@ -724,7 +736,7 @@ end
 
 function record_longpressed(track)
   local state = record_states[track]
-  if state == RECORD_MONITORING then
+  if state == RECORD_MONITORING or state == RECORD_RESAMPLING then
     record_states[track] = RECORD_PLAYING
     if mode == MODE_SEQUENCE then
       engine.monitor(track, 0)
@@ -913,10 +925,22 @@ function osc_in(path, args, from)
     local pos = args[2]
     local rate = args[3]
     local loop = args[4]
+    local buf_tempo = args[5]
     local ph = playheads[track]
     ph.actual_buf_pos = pos
     ph.actual_rate = rate
+    ph.buffer_tempo = buf_tempo*60
     grid_dirty = true
+  elseif path == "/resampleAmplitude" then
+    local track = args[1]
+    local pos = args[2]
+    local amp = args[3]
+    print("resampleamp", track, pos, amp)
+  elseif path == "/resampleDone" then
+    local track = args[1]
+    if record_states[track] == RECORD_RESAMPLING then
+      record_states[track] = RECORD_MONITORING
+    end
   end
 end
 
@@ -946,6 +970,8 @@ function grid_mini_redraw()
       g:led(record_x, record_y, INACTIVE)
     elseif state == RECORD_MONITORING then
       g:led(record_x, record_y, SELECTED)
+    elseif state == RECORD_RESAMPLING then
+      g:led(record_x, record_y, grid_breathe <= 12 and SELECTED or 0)
     elseif state == RECORD_ARMED then
       g:led(record_x, record_y, SELECTED*grid_flash)
     elseif state == RECORD_RECORDING then
@@ -1068,6 +1094,22 @@ function sync_every_beat()
 end
 
 function init()
+  local core_tempo_action = params:lookup_param('clock_tempo').action
+  params:set_action('clock_tempo', function(bpm)
+      if clock.get_tempo() == bpm then
+        return
+      end
+      for i=1,4,1 do
+        if seq_record_states[i] ~= RECORD_PLAYING then
+          -- refuse to change the tempo when monitoring or recording
+          params:set('clock_tempo', clock.get_tempo())
+          return
+        end
+      end
+      b = clock.get_beats()
+      engine.tempo_sync(b, bpm/60.0)
+      core_tempo_action(bpm)
+    end)
   clock.run(sync_every_beat)
   
   for track=1,4,1 do

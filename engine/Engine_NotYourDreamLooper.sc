@@ -1,7 +1,8 @@
 // NotYourDreamLooper can play slices of a buffer and record to it.
 
+
 NydlTrack {
-	var <server, <track, <division, <sendBus, <buffer, <bufferTempo, <synth, <monitorSynth, <recording, <level, <toFx, <fx, <fxControls;
+	var <server, <track, <division, <sendBus, <buffer, <bufferTempo, <synth, <monitorSynth, <recording, <level, <toFx, <fx, <fxControls, <resampler;
 
 	*new { |server, track, division, sendBus, filename=nil, fileTempo=nil, fileBeats=nil|
 		var buffer, bufferTempo;
@@ -37,11 +38,65 @@ NydlTrack {
 			bufferTempo = tempo;
 		});
 		^super.newCopyArgs(
-			server, track, division, sendBus, buffer, bufferTempo, nil, nil, false, 1, toFx, fx, fxControls);
+			server, track, division, sendBus, buffer, bufferTempo, nil, nil, false, 1, toFx, fx, fxControls, nil);
 	}
 
 	out {
 		^toFx[3];
+	}
+
+	maybeResample { |callback|
+		var difference = 64*division*(1 - TempoClock.tempo/bufferTempo).abs;
+		// we can tolerate 0.1 beat (less than a 32nd note) of slop
+		var tempoGood = (difference < 0.1);
+		if (tempoGood, callback, { this.resample(callback) });
+	}
+
+	resample { |callback|
+		resampler = Routine.new({
+			var done = false;
+			{ done.not }.while {
+				var toTempo = TempoClock.tempo;
+				var newBuffer = Buffer.alloc(server, server.sampleRate*((64*division/toTempo) + 1), 2);
+				var tempoGood = true;
+				// This frees itself after 16 positions
+				var resamplerSynth = Synth.new(\resample, [
+					oldBuf: buffer,
+					oldTempo: bufferTempo,
+					newBuf: newBuffer,
+					newTempo: toTempo,
+					division: division,
+					track: track,
+				]);
+				16.do {
+					var difference = 64*division*(1 - (TempoClock.tempo/toTempo)).abs;
+					// "Debug ratio % difference % \n".postf(TempoClock.tempo/toTempo, difference);
+					// we can tolerate 0.1 beat (less than a 32nd note) of slop
+					tempoGood = (difference < 0.1);
+					if (tempoGood, {
+						division.yield;
+					});
+				};
+				if (tempoGood, {
+					var oldBuf = buffer;
+					buffer = newBuffer;
+					bufferTempo = toTempo;
+					Post << "calling callback\n";
+					callback.value;
+					resampler = nil;
+					done = true;
+					// Wait until the old buffer is definitely not in use anymore.
+					(16*division).yield;
+					oldBuf.free;
+				}, {
+					// Tempo changed; try again in a few seconds once the user is done fucking with it.
+					"Tempo changed again was % now % \n".postf(TempoClock.tempo, toTempo);
+					resamplerSynth.free;
+					newBuffer.free;
+					5.yield;
+				});
+			};
+		}).play;
 	}
 
 	free {
@@ -155,6 +210,22 @@ Engine_NotYourDreamLooper : CroneEngine {
 		};
 		sendChain[0] <>> sendChain[1];
 
+		SynthDef.new(\resample, { |oldBuf, oldTempo, newBuf, newTempo, division, track|
+			var oldRate = (newTempo/oldTempo)*BufRateScale.kr(oldBuf);
+			var oldStepSize = BufRateScale.kr(oldBuf) * SampleRate.ir  * (division/oldTempo);
+			var line = Line.kr(0, 16.1, 16.1*(division/newTempo), doneAction: Done.freeSelf);
+			4.do { |i|
+				var play = PlayBuf.ar(2, oldBuf, oldRate, startPos: i*16*oldStepSize, loop: 0, doneAction: Done.none);
+				var record = RecordBuf.ar(play, newBuf, i*16*SampleRate.ir*(division/newTempo), 1.0, 0.0, loop: 0.0, doneAction: Done.none);
+
+				SendReply.kr(
+					Impulse.kr(2*(newTempo/division)),
+					'/resampleAmplitude',
+					[track, line + (i*16), Amplitude.kr(Mix.ar(play)/2, attackTime: 0.01, releaseTime: division/newTempo)]
+			    );
+			};
+		}).add;
+
 		SynthDef.new(\svfFx, { |in, out, level, cutoff=1000, res=0.1, low=0, band=1, high=0|
 			var i = In.ar(in, 2);
 			Out.ar(out, level.if(SVF.ar(i, cutoff, res, low, band, high), i));
@@ -171,8 +242,8 @@ Engine_NotYourDreamLooper : CroneEngine {
 			Out.ar(out, i);
 		}).add;
 
-		SynthDef.new(\playStep, { |out, buf, bufTempo, clockTempo, pos, division, rate=1, loop=0, gate=1, level=1, track=1, forward=1|
-			var r = forward*rate*(bufTempo/clockTempo)*BufRateScale.kr(buf);
+		SynthDef.new(\playStep, { |out, buf, bufTempo, clockTempo, pos, division, rate=1, loop=0, gate=1, level=1, track=1, forward=1, rateLag = 0|
+			var r = (forward*rate*(clockTempo/bufTempo)*BufRateScale.kr(buf)).lag(rateLag*division/clockTempo);
 			var stepSize = BufRateScale.kr(buf) * SampleRate.ir  * (division/bufTempo);
 			var start = (rate > 0).if(pos*stepSize, (pos-rate.reciprocal)*stepSize); // When reversed, start at the end of the step
 			var reset = Impulse.kr((loop > 0).if(clockTempo/(loop*division), 0));
@@ -203,7 +274,7 @@ Engine_NotYourDreamLooper : CroneEngine {
 			SendReply.kr(
 				(ampCounter > 1).if(ampPulse, 0),
 				'/recordAmplitude',
-				[track, ampCounter-1+(2*pos), Amplitude.kr(Mix.ar((llevel*bufPlay)+in)/2, attackTime: 0.01, releaseTime: division)]
+				[track, ampCounter-1+(2*pos), Amplitude.kr(Mix.ar((llevel*bufPlay)+in)/2, attackTime: 0.01, releaseTime: division/tempo)]
 			);
 			Out.ar(out, llevel*env*bufPlay);
 			RecordBuf.ar(
@@ -226,12 +297,20 @@ Engine_NotYourDreamLooper : CroneEngine {
 			luaOscAddr.sendMsg("/amplitude", track, slice, amp);
 		}, '/recordAmplitude');
 
-		ampDef = OSCdef.new(\report, { |msg, time|
+		ampDef = OSCdef.new(\resampleAmplitude, { |msg, time|
+			var track = msg[3].asFloat.asInteger;
+			var pos = msg[4].asFloat;
+			var amp = msg[5].asFloat;
+			"Amp % % %\n".postf(track, pos, amp);
+			luaOscAddr.sendMsg("/resampleAmplitude", track, pos, amp);
+		}, '/resampleAmplitude');
+
+		reportDef = OSCdef.new(\report, { |msg, time|
 			var track = msg[3].asFloat.asInteger;
 			var pos = msg[4].asFloat;
 			var rate = msg[5].asFloat;
 			var loop = msg[6].asFloat;
-			luaOscAddr.sendMsg("/report", track, pos, rate, loop);
+			luaOscAddr.sendMsg("/report", track, pos, rate, loop, tracks[track-1].bufferTempo);
 		}, '/report');
 
 		this.addCommand("playStep", "ifff", { |msg|
@@ -260,6 +339,13 @@ Engine_NotYourDreamLooper : CroneEngine {
 			});
 		});
 
+		this.addCommand("resample", "i", { |msg|
+			var track = msg[1].asInteger - 1;
+			tracks[track].resample({
+				luaOscAddr.sendMsg("/resampleDone", track+1);
+			});
+		});
+
 		this.addCommand("level", "if", { |msg|
 			var track = msg[1].asInteger - 1;
 			var level = msg[2].asFloat;
@@ -283,6 +369,9 @@ Engine_NotYourDreamLooper : CroneEngine {
 			if (tracks == nil, {
 				this.initTracks;
 			});
+			4.do { |track|
+			  tracks[track].setSynth(\clockTempo, tempo);
+			}
 		});
 
 		this.addCommand("setFx", "iisf", { |msg|
@@ -310,6 +399,7 @@ Engine_NotYourDreamLooper : CroneEngine {
 	free {
 		tracks.do { |t| t.free};
 		ampDef.free;
+		reportDef.free;
 		sendBus.free;
 		sendChain.do { |x|
 			x.free
