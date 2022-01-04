@@ -58,6 +58,7 @@ cue_mode_time = TIME_QTR
 mode = MODE_SEQUENCE
 
 cached_tempo = nil
+pressed_loop_len = 0
 
 
 function apply_rate(rate, track, sel)
@@ -129,6 +130,17 @@ function apply_fx(idx, track, sel)
   end
 end
 
+function press_stutter(division, track)
+  local pos = rounded_actual_pos(track)
+  local sel = step_selections[track]
+  if sel ~= nil then
+    pos = sel.first
+  end
+  local loop_len = pressed_loop_len > 0 and pressed_loop_len or 4/math.pow(2, cue_mode_time - 1)
+  loop_len  = loop_len/division
+  engine.playStep(track, pos, playheads[track].actual_rate, loop_len)
+end
+
 function sign(x)
   if x == 0 then
     return 0
@@ -151,6 +163,12 @@ tools = {
     apply = function (track, sel)
       apply_fx(1, track, sel)
     end,
+    onPress = function (track)
+      engine.setFx(track, 1, "level", 1)
+    end,
+    onReleaseAlways = function (track)
+      engine.setFx(track, 1, "level", 0)
+    end,      
   },
 
   fx2 = {
@@ -160,6 +178,12 @@ tools = {
     apply = function (track, sel)
       apply_fx(2, track, sel)
     end,
+    onPress = function (track)
+      engine.setFx(track, 2, "level", 1)
+    end,
+    onReleaseAlways = function (track)
+      engine.setFx(track, 2, "level", 0)
+    end,      
   },
 
   fx3 = {
@@ -169,6 +193,12 @@ tools = {
     apply = function (track, sel)
       apply_fx(3, track, sel)
     end,
+    onPress = function (track)
+      engine.setFx(track, 3, "level", 1)
+    end,
+    onReleaseAlways = function (track)
+      engine.setFx(track, 3, "level", 0)
+    end,  
   },
   
   slow = {
@@ -243,6 +273,12 @@ tools = {
     apply = function(track, sel)
       apply_stutter(2, track, sel)
     end,
+    onPress = function(track)
+      press_stutter(2, track)
+    end,
+    onRelease = function(track)
+      engine.setSynth(track, 'loop', pressed_loop_len)
+    end,
   },
   stutter3 = {
     x = 2,
@@ -252,6 +288,12 @@ tools = {
     apply = function(track, sel)
       apply_stutter(3, track, sel)
     end,
+    onPress = function(track)
+      press_stutter(3, track)
+    end,
+    onRelease = function(track)
+      engine.setSynth(track, 'loop', pressed_loop_len)
+    end,    
   },
   stutter4 = {
     x = 3,
@@ -261,6 +303,12 @@ tools = {
     apply = function(track, sel)
       apply_stutter(4, track, sel)
     end,
+    onPress = function(track)
+      press_stutter(4, track)
+    end, 
+    onRelease = function(track)
+      engine.setSynth(track, 'loop', pressed_loop_len)
+    end,    
   },
   reverse = {
     x = 2,
@@ -609,6 +657,7 @@ function manage_selection(z, pressed, selections, persist)
   local apply_tools = false
   if pressed ~= nil then
     local current_selection = selections[pressed.track]
+    pressed_loop_len = 0
     if z == 1 and current_selection == nil then
       -- Begin selection
       local held = {}
@@ -653,12 +702,11 @@ function manage_selection(z, pressed, selections, persist)
         end
       end
     elseif not persist and selections[pressed.track] ~= nil and apply_tools and mode == MODE_CUE and cue_record_states[pressed.track] ~= MODE_PLAYING then
-      local loop_len = 0
       if current_selection.last ~= current_selection.first then
-        loop_len = current_selection.last - current_selection.first + 1
+        pressed_loop_len = current_selection.last - current_selection.first + 1
       end
       was_cued[pressed.track] = true
-      engine.playStep(pressed.track, current_selection.first, playheads[pressed.track].actual_rate, loop_len)
+      engine.playStep(pressed.track, current_selection.first, playheads[pressed.track].actual_rate, pressed_loop_len)
     end
   end
 end
@@ -888,6 +936,12 @@ function g.key(x, y, z)
         end
       else
         tool.pressed = false
+        if tool.onReleaseAlways ~= nil and mode == MODE_CUE then
+          for i=1,4,1 do
+            if record_states[i] ~= RECORD_PLAYING then
+              tool.onReleaseAlways(i)
+            end
+          end        end
         if tool.onRelease ~= nil and mode == MODE_CUE then
           for i=1,4,1 do
             if track_cued(i) then
@@ -911,6 +965,13 @@ function g.key(x, y, z)
 
 end
 
+function rounded_actual_pos(track)
+  local ph = playheads[track]
+  local now = clock.get_beats()/ph.division
+  local projected = ph.actual_rate * (now-ph.actual_timestamp) + ph.actual_buf_pos + 1 -- actual_buf_pos is 0-indexed for now
+  return util.round(projected, 1)
+end
+
 function osc_in(path, args, from)
   -- print("osc", path, args[1], args[2], args[3], args[4], from)
   if path == "/amplitude" then
@@ -929,6 +990,7 @@ function osc_in(path, args, from)
     local ph = playheads[track]
     ph.actual_buf_pos = pos
     ph.actual_rate = rate
+    ph.actual_timestamp = clock.get_beats()/ph.division
     ph.buffer_tempo = buf_tempo*60
     grid_dirty = true
   elseif path == "/resampleAmplitude" then
