@@ -49,7 +49,6 @@ seq_record_states = {1, 1, 1, 1}
 cue_record_states = {1, 1, 1, 1}
 record_states = seq_record_states
 record_timers = {nil, nil, nil, nil} -- for judging longpress
-mute_states = {false, false , false, false}
 
 was_cued = {false, false, false, false}
 select_held = false
@@ -259,8 +258,10 @@ tools = {
         local ph = playheads[track]
         local offset = ph.seq_pos - ph.loop_start
         print("looping", track, sel.first, sel.last)
-        ph.loop_start = sel.first
-        ph.loop_end = sel.last
+        params:set(pn("start", track), sel.first)
+        params:set(pn("end", track), sel.last)        
+        --ph.loop_start = sel.first
+        --ph.loop_end = sel.last
         if ph.seq_pos > ph.loop_end or ph.seq_pos < ph.loop_start then
           ph.teleport = true
           ph.seq_pos = ph.loop_start + (offset % (ph.loop_end - ph.loop_start + 1))
@@ -728,9 +729,8 @@ function on_loop(track)
     -- stopping recording and monitoring happens as soon as the next slice plays.
     seq_record_states[track] = RECORD_PLAYING
     -- automatically unmute a track as soon as it finishes recording, since "mute and record" is the trick for "don't overdub"
-    if mute_states[track] then
-      mute_states[track] = false
-      engine.level(track, 1)
+    if params:get(pn("mute", track)) > 0 then
+      params:set(pn("mute", track), 0)
     end
     -- calculate the min and max amplitudes
     local lowestAmp = 1
@@ -917,12 +917,7 @@ function g.key(x, y, z)
   -- Mute
   if z == 1 and x == 5 and y%2 == 0 then
     local track = div_but_oneindex(y, 2)
-    mute_states[track] = not mute_states[track]
-    if mute_states[track] then
-      engine.level(track, 0)
-    else
-      engine.level(track, 1)
-    end
+    params:set(pn("mute", track), params:get(pn("mute", track)) > 0 and 0 or 1)
   end
   -- Tools
   local tool = lookup_tool(x, y, mode)
@@ -1055,7 +1050,7 @@ function grid_mini_redraw()
     
     local mute_x = record_x
     local mute_y = record_y + 1
-    g:led(mute_x, mute_y, mute_states[track] and INACTIVE or SELECTED)
+    g:led(mute_x, mute_y, params:get(pn("mute", track)) > 0 and INACTIVE or SELECTED)
   end
 end
 
@@ -1166,7 +1161,110 @@ function sync_every_beat()
   end
 end
 
+
+-- param name
+function pn(base, track)
+  return base .. "_" .. track
+end
+
 function init()
+  for track=1,4,1 do
+    params:add_group("Track "..track, 20)
+    params:add_number(pn("start", track), "loop start", 1, 64, 1)
+    params:set_action(pn("start", track), function(pos)
+        playheads[track].loop_start = pos
+        if playheads[track].loop_end < pos then
+          params:set(pn("end", track), pos)
+        end
+      end)
+    params:add_number(pn("end", track), "loop end", 1, 64, 64)
+    params:set_action(pn("end", track), function (pos)
+        if pos < playheads[track].loop_start then
+          params:set(pn("end", track), playheads[track].loop_start)
+        else
+          playheads[track].loop_end = pos
+        end
+    end)
+    local amp_spec = controlspec.AMP:copy()
+    amp_spec.default = 1.0
+    params:add_control(pn("level", track), "level", amp_spec)
+    params:set_action(pn("level", track), function(level)
+      engine.level(track, params:get(pn("mute", track)) > 0 and 0 or level)
+    end)
+    params:add_binary(pn("mute", track), "mute", "toggle", 0)
+    params:set_action(pn("mute", track), function(mute)
+      engine.level(track, mute > 0 and 0 or params:get(pn("level", track)))
+    end)
+    -- FX
+    params:add_separator("decimate")
+    params:add_binary(pn("fx1_on", track), "on", "toggle", 0)
+    params:add_control(pn("fx1_level", track), "wet", amp_spec)
+    params:set_action(pn("fx1_on", track), function (on)
+      engine.setFx(track, 1, "level", on*params:get(pn("fx1_level", track)))
+    end)
+    params:set_action(pn("fx1_level", track), function (level)
+      engine.setFx(track, 1, "level", level*params:get(pn("fx1_on", track)))
+    end)
+    params:add_control(pn("fx1_rate", track), "rate", controlspec.new(480, 48000, 'exp', 0, 1000, "Hz"))
+    params:set_action(pn("fx1_rate", track), function (rate)
+      engine.setFx(track, 1, "rate", rate)
+    end)
+    params:add_control(pn("fx1_smooth", track), "smooth", controlspec.new(0.0, 1.0, 'lin', 0, 0.2))
+    params:set_action(pn("fx1_smooth", track), function (smooth)
+      engine.setFx(track, 1, "smooth", smooth)
+    end)
+    
+    params:add_separator("filter")
+    params:add_binary(pn("fx2_on", track), "on", "toggle", 0)
+    params:add_control(pn("fx2_level", track), "wet", amp_spec)
+    params:set_action(pn("fx2_on", track), function (on)
+      engine.setFx(track, 2, "level", on*params:get(pn("fx2_level", track)))
+    end)
+    params:set_action(pn("fx2_level", track), function (level)
+      engine.setFx(track, 2, "level", level*params:get(pn("fx2_on", track)))
+    end)
+    params:add_control(pn("fx2_cutoff", track), "cutoff", controlspec.FREQ)
+    params:set_action(pn("fx2_cutoff", track), function (f)
+      engine.setFx(track, 2, "cutoff", f)
+    end)    
+    params:add_control(pn("fx2_res", track), "resonance", controlspec.RQ)
+    params:set_action(pn("fx2_res", track), function (rq)
+      engine.setFx(track, 2, "res", rq)
+    end)
+    params:add_control(pn("fx2_low", track), "low pass", controlspec.AMP)
+    params:set_action(pn("fx2_low", track), function (a)
+      engine.setFx(track, 2, "low", a)
+    end)    
+    params:add_control(pn("fx2_band", track), "band pass", amp_spec)
+    params:set_action(pn("fx2_band", track), function (a)
+      engine.setFx(track, 2, "band", a)
+    end)    
+    params:add_control(pn("fx2_high", track), "high pass", amp_spec)
+    params:set_action(pn("fx2_high", track), function (a)
+      engine.setFx(track, 2, "high", a)
+    end)
+    
+    params:add_separator("delay send")
+    params:add_binary(pn("fx3_on", track), "on", "toggle", 0)
+    params:add_control(pn("fx3_level", track), "wet", amp_spec)
+    params:set_action(pn("fx3_on", track), function (on)
+      engine.setFx(track, 3, "level", on*params:get(pn("fx3_level", track)))
+    end)
+    params:set_action(pn("fx3_level", track), function (level)
+      engine.setFx(track, 3, "level", level*params:get(pn("fx3_on", track)))
+    end)
+  end
+  
+  params:add_separator("send")
+  params:add_control("send_delay", "delay time", controlspec.DELAY)
+  params:set_action("send_delay", function(time)
+    engine.setSend("delay", time)
+  end)
+  params:add_number("send_repeats", "delay repeats", 1, 20, 4)
+  params:set_action("send_repeats", function(rep)
+    engine.setSend("repeats", rep)
+  end)
+  
   local core_tempo_action = params:lookup_param('clock_tempo').action
   params:set_action('clock_tempo', function(bpm)
       if clock.get_tempo() == bpm then
@@ -1222,7 +1320,7 @@ function redraw()
       screen.move(slice, track_start_y+4)
       screen.move_rel(0, lamp/2)
       local level = 5
-      if mute_states[track] == true then
+      if params:get(pn("mute", track)) > 0 then
         level = 2
       end
       screen.level(level)
@@ -1245,7 +1343,7 @@ function redraw()
   if mode == MODE_SEQUENCE then
     screen.move(0, 60)
     screen.level(10)
-    if mute_states[screen_track] then
+    if params:get(pn("mute", screen_track)) > 0 then
       if record_states[screen_track] == RECORD_PLAYING then
         screen.text("mute")
       elseif record_states[screen_track] == RECORD_RECORDING then

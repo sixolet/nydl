@@ -14,14 +14,17 @@ NydlTrack {
 		fx[0] = Synth(\decimateFx, [
 			in: toFx[0],
 			out: toFx[1],
+			send: sendBus,
 		], addAction: \addToTail);
 		fx[1] = Synth(\svfFx, [
 			in: toFx[1],
 			out: toFx[2],
+			send: sendBus,
 		], target: fx[0], addAction: \addAfter);
 		fx[2] = Synth(\sendFx, [
 			in: toFx[2],
 			out: toFx[3],
+			send: sendBus,
 		], target: fx[1], addAction: \addAfter);
 
 		if (filename != nil, {
@@ -184,7 +187,7 @@ NydlTrack {
 
 Engine_NotYourDreamLooper : CroneEngine {
 	classvar luaOscPort = 10111;
-	var <tracks, <ampDef, <reportDef, <sendBus, <sendChain;
+	var <tracks, <ampDef, <reportDef, <sendBus, <returnBus, <sendSynth;
 
 	*new { arg context, doneCallback;
 		^super.new(context, doneCallback);
@@ -194,8 +197,14 @@ Engine_NotYourDreamLooper : CroneEngine {
 		tracks = 4.collect { |i|
 			NydlTrack.new(Server.default, i+1, 0.25, sendBus, nil, nil, nil);
 		};
+		sendSynth = Synth(\sendDelay, [
+			in: sendBus,
+			out: returnBus,
+			delay: 0.2,
+			repeats: 4,
+		], addAction: \addToTail);
 		{
-			Mix.ar(tracks.collect({|t| In.ar(t.out, 2)}) ++ [sendChain.last.ar(2)]).tanh
+			Mix.ar(tracks.collect({|t| In.ar(t.out, 2)}) ++ [In.ar(returnBus, 2)]).tanh
 		}.play(addAction: \addToTail);
 	}
 
@@ -203,12 +212,7 @@ Engine_NotYourDreamLooper : CroneEngine {
 		var fadeEnv = Env.asr(0.01, 1.0, 0.01, curve: 0);
 		var luaOscAddr = NetAddr("localhost", luaOscPort);
 		sendBus = Bus.audio(Server.default, numChannels: 2);
-		sendChain = 2.collect { NodeProxy.new };
-		sendChain[0].source = sendBus;
-		sendChain[1].source = { |delay=0.2, repeats=5|
-			CombC.ar(\in.ar(0!2), 2, delay, delay*repeats);
-		};
-		sendChain[0] <>> sendChain[1];
+		returnBus = Bus.audio(Server.default, numChannels: 2);
 
 		SynthDef.new(\resample, { |oldBuf, oldTempo, newBuf, newTempo, division, track|
 			var oldRate = (newTempo/oldTempo)*BufRateScale.kr(oldBuf);
@@ -226,6 +230,10 @@ Engine_NotYourDreamLooper : CroneEngine {
 					[track, line + (i*16), pwr]
 			    );
 			};
+		}).add;
+
+		SynthDef.new(\sendDelay, { |in, out, delay, repeats|
+			Out.ar(out, CombC.ar(In.ar(in, 2), 2, delay.lag(0.2), delay*repeats));
 		}).add;
 
 		SynthDef.new(\svfFx, { |in, out, level, cutoff=1000, res=0.1, low=0, band=1, high=0|
@@ -390,6 +398,12 @@ Engine_NotYourDreamLooper : CroneEngine {
 			tracks[track].setFx(fxIdx, control, value);
 		});
 
+		this.addCommand("setSend", "sf", { |msg|
+			var control = msg[1].asSymbol;
+			var value = msg[2].asFloat;
+			sendSynth.set(control, value);
+		});
+
 		this.addCommand("setSynth", "isf", { |msg|
 			var track = msg[1].asInteger - 1;
 			var control = msg[2].asSymbol;
@@ -405,9 +419,8 @@ Engine_NotYourDreamLooper : CroneEngine {
 		tracks.do { |t| t.free};
 		ampDef.free;
 		reportDef.free;
+		sendSynth.free;
 		sendBus.free;
-		sendChain.do { |x|
-			x.free
-		};
+		returnBus.free;
 	}
 }
