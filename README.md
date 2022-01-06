@@ -12,7 +12,12 @@ Arrange some sound to go into your Norns, ideally one that is synced
 to the Norns clock. Now turn down Norns' own monitor of your
 sound. We're going to be monitoring from within the script.
 
-## Grid overview
+
+## Overview
+
+When you start nydl, Norns will show each track and the playhead
+within it. You can select a track with E1. K2 is the *manticore* (see
+the whole section about the manticore, below).
 
 When you start nydl, your grid will look like this:
 
@@ -31,11 +36,14 @@ playhead.
 
 ## The Manticore
 
-In the per-track tools section, the top left button of the
+In the per-track tools section of the grid, the top left button of the
 per-track controls for every track (the one that's darker) is the
-*manticore* button. Aside from being a mythical creature, this
-*manticore* is a portmanteau of "monitor" and "record", and that's
-what you'll do with this button.
+*manticore* button. On Norns itself, K2 is the *manticore* button for
+the selected track.
+
+Aside from being a mythical creature, this *manticore* is a
+portmanteau of "monitor" and "record", and that's what you'll do with
+this button.
 
 Press that manticore for a channel, and you should hear your input
 monitored on that channel. Press it once more, and it should begin
@@ -67,3 +75,47 @@ muted. When the manticore is done recording, along with muting the
 monitor, it'll unmute the track for you so it keeps playing
 seamlessly.
 
+## The Sigil
+
+The tools at your disposal are arranged in a *sigil* to the left of
+your grid. The pattern keeps you from having to count buttons.
+
+### Edit vs. Cue
+
+The first row of the sigil selects the mode for the grid. The meaning
+of "recording" and "monitoring" are different in each mode. The two
+modes have independent monitoring status, and you can't switch modes
+while recording.
+
+**Edit mode** The top left button selects *edit mode*.
+
+  In edit mode, monitoring monitors the input sound.
+
+  In edit mode, recording records the input sound.
+
+  In edit mode, the right half of the grid represents steps in a
+  sequence, each of which may contain a parameter lock; lockable
+  parameters include a buffer position to jump to, a rate to play at,
+  a rate to stutter the loop at, or effect parameters. You have 64
+  steps in your sequence, available 16 steps at a time on 4 pages. The
+  pages are accessed in the middle section of the grid. In edit mode
+  you can select one or more steps by pressing a range of buttons on a
+  track, and then press the button for a tool on the sigil, applying
+  that tool to that range of steps. It also works to press a page
+  button or a range of page buttons; this will apply the tool to the
+  whole page.
+
+**Cue mode** The button on the other side of the sigil from the edit
+  mode button is the cue mode button. 
+
+  In cue mode, monitoring determines which tracks your tools from the
+  sigil will be applied to, and which tracks are available for cueing.
+
+  In cue mode, recording (will, yet unimplemented) records your series
+  of cues into the sequence.
+
+  In cue mode, the right half of the grid represents your sound. If
+  you have a sequence with jumps, you'll see the playhead jump to
+  follow the sequence. You can cue specific slices by pressing buttons
+  or ranges of buttons. Pressing sigil buttons cues their effects
+  wherever the playhead currently is.
