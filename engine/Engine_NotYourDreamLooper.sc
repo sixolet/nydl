@@ -213,15 +213,17 @@ Engine_NotYourDreamLooper : CroneEngine {
 		SynthDef.new(\resample, { |oldBuf, oldTempo, newBuf, newTempo, division, track|
 			var oldRate = (newTempo/oldTempo)*BufRateScale.kr(oldBuf);
 			var oldStepSize = BufRateScale.kr(oldBuf) * SampleRate.ir  * (division/oldTempo);
+			var newStepSize = SampleRate.ir * (division/newTempo);
 			var line = Line.kr(0, 16.1, 16.1*(division/newTempo), doneAction: Done.freeSelf);
 			4.do { |i|
 				var play = PlayBuf.ar(2, oldBuf, oldRate, startPos: i*16*oldStepSize, loop: 0, doneAction: Done.none);
 				var record = RecordBuf.ar(play, newBuf, i*16*SampleRate.ir*(division/newTempo), 1.0, 0.0, loop: 0.0, doneAction: Done.none);
+				var pwr = (RunningSum.ar((Mix.ar(play)/2).squared, (newStepSize/2)) / (newStepSize/2)).sqrt;
 
 				SendReply.kr(
 					Impulse.kr(2*(newTempo/division)),
 					'/resampleAmplitude',
-					[track, line + (i*16), Amplitude.kr(Mix.ar(play)/2, attackTime: 0.01, releaseTime: division/newTempo)]
+					[track, line + (i*16), pwr]
 			    );
 			};
 		}).add;
@@ -264,17 +266,20 @@ Engine_NotYourDreamLooper : CroneEngine {
 		SynthDef.new(\record, {|out, buf, tempo, pos, division, gate=1, level=1, track=1|
 
 			var in = SoundIn.ar([0, 1]);
-			var start = SampleRate.ir  * (pos*division/tempo);
+			var stepSize = SampleRate.ir * (division/tempo);
+			var start = pos*stepSize;
 			var env = EnvGen.kr(fadeEnv, gate, doneAction: Done.freeSelf);
 			var llevel = level.lag(0.01);
 
 			var bufPlay = PlayBuf.ar(2, buf, rate: 1.0, startPos: start, loop: 1.0);
 			var ampPulse = Impulse.kr(tempo*2/division);
 			var ampCounter = PulseCount.kr(ampPulse);
+			var pwr = (RunningSum.ar((Mix.ar((llevel*bufPlay)+in)/2).squared, (stepSize/2)) / (stepSize/2)).sqrt;
+
 			SendReply.kr(
 				(ampCounter > 1).if(ampPulse, 0),
 				'/recordAmplitude',
-				[track, ampCounter-1+(2*pos), Amplitude.kr(Mix.ar((llevel*bufPlay)+in)/2, attackTime: 0.01, releaseTime: division/tempo)]
+				[track, ampCounter-1+(2*pos), pwr]
 			);
 			Out.ar(out, llevel*env*bufPlay);
 			RecordBuf.ar(

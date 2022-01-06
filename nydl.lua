@@ -60,6 +60,9 @@ mode = MODE_SEQUENCE
 cached_tempo = nil
 pressed_loop_len = 0
 
+-- Screen interface globals
+screen_track = 1
+
 
 function apply_rate(rate, track, sel)
   if sel == nil then return end
@@ -637,6 +640,14 @@ function grid_clock()
   end
 end
 
+function screen_clock()
+  while true do
+    clock.sync(1/8.0)
+    clock.sleep(1/30.0)
+    redraw()
+  end
+end
+
 function active_selection(track)
   if step_selections[track] ~= nil then
     print("step sel")
@@ -1178,5 +1189,88 @@ function init()
     clock.run(sequencer_clock, track)
   end
   clock.run(grid_clock)
+  clock.run(screen_clock)
 end
 
+function enc(n, d)
+  if n == 1 then
+    screen_track = mod_but_oneindex(math.floor(screen_track + d), 4)
+  end
+end
+
+function key(n, z)
+  if n == 2 then
+    if z == 1 then
+      record_press_initiated(screen_track)
+    else
+      record_released(screen_track)
+    end
+  end
+end
+
+function redraw()
+  screen.clear()
+  for track=1,4,1 do
+    -- The audio
+    local track_start_y = mul_but_oneindex(track, 14)
+    
+    for slice=1,127,1 do
+      local lamp = 1
+      if amplitudes[track][slice] ~= nil then
+        lamp = math.max(8+math.log(amplitudes[track][slice]), 1)        
+      end
+      screen.move(slice, track_start_y+4)
+      screen.move_rel(0, lamp/2)
+      local level = 5
+      if mute_states[track] == true then
+        level = 2
+      end
+      screen.level(level)
+      screen.line_rel(0, -1 * lamp)
+      screen.stroke()
+      screen.level(0)
+    end
+    if track == screen_track then
+      screen.move(0, track_start_y + 5)
+      screen.level(15)
+      screen.line_rel(129, 0)
+      screen.stroke()
+    end
+    
+    local ph = playheads[track]
+    screen.move(ph.actual_buf_pos*2, track_start_y)
+    screen.level(15)
+    screen.line_rel(0, 8)
+  end
+  if mode == MODE_SEQUENCE then
+    screen.move(0, 60)
+    screen.level(10)
+    if mute_states[screen_track] then
+      if record_states[screen_track] == RECORD_PLAYING then
+        screen.text("mute")
+      elseif record_states[screen_track] == RECORD_RECORDING then
+        screen.text("rec")
+      elseif record_states[screen_track] == RECORD_ARMED then
+        screen.text("arm")
+      elseif record_states[screen_track] == RECORD_MONITORING then
+        screen.text("monitor")        
+      elseif record_states[screen_track] == RECORD_RESAMPLING then
+        screen.text("rsmpl")          
+      end      
+    else
+      if record_states[screen_track] == RECORD_PLAYING then
+        screen.text("play")
+      elseif record_states[screen_track] == RECORD_RECORDING then
+        screen.text("dub")
+      elseif record_states[screen_track] == RECORD_MONITORING then
+        screen.text("monitor")        
+      elseif record_states[screen_track] == RECORD_ARMED then
+        screen.text("arm")
+      elseif record_states[screen_track] == RECORD_RESAMPLING then
+        screen.text("rsmpl")           
+      end
+    end  
+  end
+  screen.stroke()  
+  screen.update()
+end
