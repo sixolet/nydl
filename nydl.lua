@@ -116,19 +116,20 @@ function apply_fx(idx, track, sel)
   tab.print(sel)
   local seq = sequence[track]
   local attr = "fx_"..idx.."_level"
-  local was = seq[sel.first][attr]
+  local global_level = params:get(pn("fx"..idx.."_level", track))
+  local global_on = params:get(pn("fx"..idx.."_on", track)) > 0
   for i=sel.first,sel.last,1 do
-    seq[i][attr] = nil
+    seq[i][attr] = (global_on and 0 or global_level)
   end
-  if was ~= nil and was > 0 then 
-    seq[sel.first][attr] = 0
+end
+
+function cue_fx(idx, track, z)
+  local global_level = params:get(pn("fx"..idx.."_level", track))
+  local global_on = params:get(pn("fx"..idx.."_on", track)) > 0
+  if (z == 1) == global_on then
+    engine.setFx(track, idx, "level", 0)
   else
-    seq[sel.first][attr] = 1
-    if sel.last < 64 then
-      seq[sel.last + 1][attr] = 0
-    elseif sel.first ~= 1 then
-      seq[1][attr] = 0
-    end
+    engine.setFx(track, idx, "level", global_level)
   end
 end
 
@@ -166,10 +167,10 @@ tools = {
       apply_fx(1, track, sel)
     end,
     onPress = function (track)
-      engine.setFx(track, 1, "level", 1)
+      cue_fx(1, track, 1)
     end,
     onReleaseAlways = function (track)
-      engine.setFx(track, 1, "level", 0)
+      cue_fx(1, track, 0)
     end,      
   },
 
@@ -181,10 +182,10 @@ tools = {
       apply_fx(2, track, sel)
     end,
     onPress = function (track)
-      engine.setFx(track, 2, "level", 1)
+      cue_fx(2, track, 1)
     end,
     onReleaseAlways = function (track)
-      engine.setFx(track, 2, "level", 0)
+      cue_fx(2, track, 0)
     end,      
   },
 
@@ -196,10 +197,10 @@ tools = {
       apply_fx(3, track, sel)
     end,
     onPress = function (track)
-      engine.setFx(track, 3, "level", 1)
+      cue_fx(3, track, 1)
     end,
     onReleaseAlways = function (track)
-      engine.setFx(track, 3, "level", 0)
+      cue_fx(3, track, 0)
     end,  
   },
   
@@ -488,6 +489,7 @@ for track=1,4,1 do
     loop_start = 1, -- loop within sequence
     loop_end = 64,  -- loop within sequence
     division = 0.25, -- beats per step in sequence
+    fx_set = { {}, {}, {} }, -- Attributes that are set of the fx
   }
   
   for step=1,64,1 do
@@ -545,6 +547,7 @@ function advance_playhead(track)
     p.teleport = false
     was_cued[track] = false
   end
+  local fx_set_step = {{}, {}, {}}
   for k, v in pairs(step) do
     if util.string_starts(k, "fx_") then
       local parts = tab.split(k, "_")
@@ -552,11 +555,32 @@ function advance_playhead(track)
       local attr = parts[3]
       -- print("fx", track, idx, attr, v)
       engine.setFx(track, idx, attr, v)
+      fx_set_step[idx][attr] = true
+      p.fx_set[idx][attr] = true
     end
-  end  
+  end
+  -- find the fx that are set on the playhead and _not_ set on the step, and set them back to their corresponding property.
+  for idx=1,3,1 do
+    for k, v in pairs(p.fx_set[idx]) do
+      if not fx_set_step[idx][k] then
+        p.fx_set[idx][k] = nil
+        local value = get_fx_value(track, idx, k)
+        engine.setFx(track, idx, k, value)
+      end
+    end
+  end
   p.buf_pos = step.buf_pos
   p.rate = step.rate
   grid_dirty = true
+end
+
+function get_fx_value(track, idx, key)
+  if key == "level" then
+    local on = params:get(pn("fx"..idx.."_on", track))
+    local level = params:get(pn("fx"..idx.."_level", track))
+    return on*level
+  end
+  return params:get(pn("fx"..idx.."_"..key, track))
 end
 
 function mod_but_oneindex(x, m)
@@ -665,7 +689,7 @@ function active_selection(track)
   end
 end
 
-function manage_selection(z, pressed, selections, persist)
+function manage_selection(z, pressed, selections, persist, persist_only_single)
   local apply_tools = false
   if pressed ~= nil then
     local current_selection = selections[pressed.track]
@@ -688,8 +712,11 @@ function manage_selection(z, pressed, selections, persist)
       current_selection.held[pressed.index] = true
       local sorted = tab.sort(current_selection.held)
       if current_selection.first == current_selection.last and current_selection.first == pressed.index and #sorted == 1 then
-        selections[pressed.track] = nil
+        selections[pressed.track].persist = false
       else
+        if persist_only_single and #sorted > 1 then
+          selections[pressed.track].persist = false
+        end
         current_selection.first = sorted[1]
         current_selection.last = sorted[#sorted]
       end
@@ -962,11 +989,11 @@ function g.key(x, y, z)
   
   -- Section selection
   local pressed = section_for_button(x, y)
-  manage_selection(z, pressed, section_selections, true)
+  manage_selection(z, pressed, section_selections, true, true)
   
   -- Step selection
   pressed = step_for_button(x, y)
-  manage_selection(z, pressed, step_selections, select_held)
+  manage_selection(z, pressed, step_selections, select_held, false)
   if pressed ~= nil and select_held then froze = true end
 
 end
@@ -1167,9 +1194,24 @@ function pn(base, track)
   return base .. "_" .. track
 end
 
-function init()
+function reset_track(track)
+  playheads[track].seq_pos = playheads[track].loop_end
+  playheads[track].teleport = true
+end
+
+function reset_all()
   for track=1,4,1 do
-    params:add_group("Track "..track, 20)
+    reset_track(track)
+  end
+end
+
+function init()
+  params:add_separator("general")
+  params:add_trigger("reset_all", "reset all")
+  params:set_action("reset_all", reset_all)
+  params:add_separator("tracks")
+  for track=1,4,1 do
+    params:add_group("track "..track, 21)
     params:add_number(pn("start", track), "loop start", 1, 64, 1)
     params:set_action(pn("start", track), function(pos)
         playheads[track].loop_start = pos
@@ -1194,6 +1236,10 @@ function init()
     params:add_binary(pn("mute", track), "mute", "toggle", 0)
     params:set_action(pn("mute", track), function(mute)
       engine.level(track, mute > 0 and 0 or params:get(pn("level", track)))
+    end)
+    params:add_trigger(pn("reset", track), "reset")
+    params:set_action(pn("reset", track), function () 
+      reset_track(track)
     end)
     -- FX
     params:add_separator("decimate")
