@@ -187,7 +187,7 @@ NydlTrack {
 
 Engine_NotYourDreamLooper : CroneEngine {
 	classvar luaOscPort = 10111;
-	var <tracks, <ampDef, <reportDef, <sendBus, <returnBus, <sendSynth;
+	var <tracks, <ampDef, <reportDef, <sendBus, <returnBus, <sendSynth, <metro;
 
 	*new { arg context, doneCallback;
 		^super.new(context, doneCallback);
@@ -230,6 +230,10 @@ Engine_NotYourDreamLooper : CroneEngine {
 					[track, line + (i*16), pwr]
 			    );
 			};
+		}).add;
+
+		SynthDef.new(\metronome, { |out, hz|
+			Out.ar(out, 0.25*SinOsc.ar(hz!2)*EnvGen.kr(Env.perc(releaseTime: 0.3), Impulse.kr(0), doneAction: Done.freeSelf));
 		}).add;
 
 		SynthDef.new(\sendDelay, { |in, out, delay, repeats|
@@ -413,6 +417,11 @@ Engine_NotYourDreamLooper : CroneEngine {
 			});
 			tracks[track].setSynth(control, value);
 		});
+
+		this.addCommand("metronome", "f", { |msg|
+			var hz = msg[1].asFloat;
+			Synth(\metronome, [hz: hz]);
+		});
 	}
 
 	free {
@@ -422,5 +431,6 @@ Engine_NotYourDreamLooper : CroneEngine {
 		sendSynth.free;
 		sendBus.free;
 		returnBus.free;
+		metro.free;
 	}
 }

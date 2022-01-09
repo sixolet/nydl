@@ -32,6 +32,25 @@ TIME_QTR = 1
 TIME_8TH = 2
 TIME_16TH = 3
 
+-- Crow output modes
+CROW_MODES = {"unassigned", "track 1 loop", "track 2 loop", "track 3 loop", "track 4 loop", 
+  "beat", "eighth note", "eighth triplet", "sixteenth note", "12 ppqn", "24 ppqn", "48 ppqn"}
+CROW_BEAT_DIVISIONS = {nil, nil, nil, nil, nil, 1, 2, 3, 4, 12, 24, 48}
+CROW_LOOP_TRACKS = {nil, 1, 2, 3, 4}
+
+CROW_UNASSIGNED = 1
+CROW_TRACK1_LOOP = 2
+CROW_TRACK2_LOOP = 3
+CROW_TRACK3_LOOP = 4
+CROW_TRACK4_LOOP = 5
+CROW_BEAT = 6
+CROW_EIGHTH = 7
+CROW_TRIPLET = 8
+CROW_SIXTEENTH = 9
+CROW_12PPQN = 10
+CROW_24PPQN = 11
+CROW_48PPQN = 12
+
 -- Global script data
 sequence = { {}, {}, {}, {} }
 amplitudes = { {}, {}, {}, {} }
@@ -566,6 +585,15 @@ function advance_playhead(track)
         p.fx_set[idx][k] = nil
         local value = get_fx_value(track, idx, k)
         engine.setFx(track, idx, k, value)
+      end
+    end
+  end
+  
+  if looped then
+    for i=1,4,1 do
+      if CROW_LOOP_TRACKS[params:get("crow_"..i)] == track then
+        crow.output[i].action = "pulse(0.01, 10)"
+        crow.output[i]()
       end
     end
   end
@@ -1185,9 +1213,37 @@ function sync_every_beat()
     b = clock.get_beats()
     t = clock.get_tempo()
     engine.tempo_sync(b, t/60.0)
+    if params:get("metronome") > 0 then
+      local rounded = util.round(b, 1)
+      if rounded % 4 == 0 then
+        engine.metronome(440)
+      else
+        engine.metronome(220)
+      end
+    end
   end
 end
 
+
+function crow_every_beat()
+  while true do
+    clock.sync(1)
+    local tempo = clock.get_tempo()
+    for i=1,4,1 do
+      local div = CROW_BEAT_DIVISIONS[params:get("crow_"..i)]
+      local beat = 60/tempo
+      if div ~= nil then
+        crow.output[i].action = string.format(
+          "times( %i, { to(10, %.5f, 'now'), to(0, %.5f, 'now') } )",
+          div,
+          beat/(4.0*div),
+          beat/(4.0*div))
+
+        crow.output[i]()
+      end
+    end
+  end
+end
 
 -- param name
 function pn(base, track)
@@ -1207,8 +1263,37 @@ end
 
 function init()
   params:add_separator("general")
+  params:add_binary("metronome", "metronome", "toggle", 0)
+  params:set_action("metronome", function(m)
+    engine.metronome(m)
+  end)
   params:add_trigger("reset_all", "reset all")
   params:set_action("reset_all", reset_all)
+  params:add_number(
+    "reset_all_every", 
+    "reset every", 
+    0, 
+    256, 
+    0, 
+    function(param)
+      if param:get() == 0 then
+        return "never"
+      else
+        return ""..param:get()
+      end
+    end,
+    false)
+  clock.run(function ()
+    while true do
+      local every = params:get("reset_all_every")
+      if every == 0 then
+        clock.sync(4)
+      else
+        clock.sync(every)
+        reset_all()
+      end
+    end
+  end)
   params:add_separator("tracks")
   for track=1,4,1 do
     params:add_group("track "..track, 21)
@@ -1311,6 +1396,11 @@ function init()
     engine.setSend("repeats", rep)
   end)
   
+  params:add_separator("crow")
+  for i=1,4,1 do
+    params:add_option("crow_"..i, "crow out "..i, CROW_MODES, 1)
+  end
+  
   local core_tempo_action = params:lookup_param('clock_tempo').action
   params:set_action('clock_tempo', function(bpm)
       if clock.get_tempo() == bpm then
@@ -1328,6 +1418,7 @@ function init()
       core_tempo_action(bpm)
     end)
   clock.run(sync_every_beat)
+  clock.run(crow_every_beat)
   
   for track=1,4,1 do
     clock.run(sequencer_clock, track)
