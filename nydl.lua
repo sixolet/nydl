@@ -35,8 +35,8 @@ TIME_16TH = 3
 
 -- Crow output modes
 CROW_MODES = {"unassigned", "track 1 loop", "track 2 loop", "track 3 loop", "track 4 loop", 
-  "beat", "eighth note", "eighth triplet", "sixteenth note", "12 ppqn", "24 ppqn"}
-CROW_BEAT_DIVISIONS = {nil, nil, nil, nil, nil, 1, 2, 3, 4, 12, 24}
+  "beat", "eighth note", "eighth triplet", "sixteenth note"}
+CROW_BEAT_DIVISIONS = {nil, nil, nil, nil, nil, 1, 2, 3, 4}
 CROW_LOOP_TRACKS = {nil, 1, 2, 3, 4}
 
 CROW_UNASSIGNED = 1
@@ -48,9 +48,9 @@ CROW_BEAT = 6
 CROW_EIGHTH = 7
 CROW_TRIPLET = 8
 CROW_SIXTEENTH = 9
-CROW_12PPQN = 10
-CROW_24PPQN = 11
-CROW_48PPQN = 12
+--CROW_12PPQN = 10
+--CROW_24PPQN = 11
+--CROW_48PPQN = 12
 
 -- Global script data
 sequence = { {}, {}, {}, {} }
@@ -595,6 +595,9 @@ function advance_playhead(track)
   if cue_record_states[track] == RECORD_RECORDING then
     step.mute = params:get(pn("mute", track)) > 0
   end
+  prev_step.pos_cued = nil
+  prev_step.rate_cued = nil
+  prev_step.loop_cued = nil
   if mode == MODE_CUE and track_cued(track) then
     -- record without locks
     if cue_record_states[track] == RECORD_RECORDING then
@@ -602,11 +605,13 @@ function advance_playhead(track)
         step.pos_cued = nil
       else
         step.buf_pos = prev_step.buf_pos + prev_step.rate
+        step.lock_pos = false
       end
       if step.rate_cued then
         step.rate_cued = nil
       else
         step.rate = prev_step.rate
+        step.lock_rate = false
       end
       if step.loop_cued then
         step.loop_cued = nil
@@ -615,6 +620,7 @@ function advance_playhead(track)
         if step.subdivision and step.subdivision > 0 then
           step.buf_pos = prev_step.buf_pos
         end
+        step.lock_subdivision = false
       end
       step.mute = false
     end
@@ -655,6 +661,7 @@ function advance_playhead(track)
   if looped then
     for i=1,4,1 do
       if CROW_LOOP_TRACKS[params:get("crow_"..i)] == track then
+        print("reset", track)
         crow.output[i].action = "pulse(0.01, 10)"
         crow.output[i]()
       end
@@ -1307,6 +1314,9 @@ function sync_every_beat()
 end
 
 
+crow_known_tempo = nil
+crow_known_div = {nil, nil, nil, nil}
+
 function crow_every_beat()
   while true do
     clock.sync(1)
@@ -1320,10 +1330,11 @@ function crow_every_beat()
           div,
           beat/(4.0*div),
           beat/(4.0*div))
-
         crow.output[i]()
       end
+      crow_known_div[i] = div
     end
+    crow_known_tempo = tempo
   end
 end
 
