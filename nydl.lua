@@ -1,5 +1,6 @@
 tab = require 'tabutil'
 
+
 engine.name = 'NotYourDreamLooper'
 
 g = grid.connect()
@@ -152,6 +153,18 @@ function cue_fx(idx, track, z)
   end
 end
 
+function cue_rate(rate, track)
+  print("cue rate", rate, track)
+  engine.setSynth(track, "rate", rate)
+  
+  if cue_record_states[track] == RECORD_RECORDING then
+    local seq_pos = rounded_seq_pos(track)
+    sequence[track][seq_pos].rate = rate
+    sequence[track][seq_pos].lock_rate = true
+    sequence[track][seq_pos].rate_cued = true
+  end
+end
+
 function press_stutter(division, track)
   local pos = rounded_actual_pos(track)
   local sel = step_selections[track]
@@ -250,13 +263,13 @@ tools = {
       apply_rate(2.0, track, sel)
     end,
     onPress = function (track)
-      engine.setSynth(track, "rate", 2)
+      cue_rate(2, track)
     end,
     onRelease = function (track)
       if tools.slow.pressed then
-        engine.setSynth(track, "rate", 0.5)
+        cue_rate(0.5, track)
       else
-        engine.setSynth(track, "rate", 1)
+        cue_rate(1, track)
       end
     end,        
   },
@@ -368,10 +381,12 @@ tools = {
       end
     end,
     onPress = function(track)
-      engine.setSynth(track, "forward", -1)
+      cue_rate(-1 * playheads[track].actual_rate, track)
+      --engine.setSynth(track, "forward", -1)
     end,
     onRelease = function(track)
-      engine.setSynth(track, "forward", 1)
+      cue_rate(-1 * playheads[track].actual_rate, track)
+      -- engine.setSynth(track, "forward", 1)
     end,
   },
   cut = {
@@ -558,10 +573,39 @@ function advance_playhead(track)
     grid_dirty = true
     return
   end
+  if cue_record_states[track] == RECORD_RECORDING then
+    step.mute = params:get(pn("mute", track)) > 0
+  end
   if mode == MODE_CUE and track_cued(track) then
-    -- pass
+    -- record without locks
+    if cue_record_states[track] == RECORD_RECORDING then
+      if step.pos_cued then
+        step.pos_cued = nil
+      else
+        step.buf_pos = prev_step.buf_pos + prev_step.rate
+      end
+      if step.rate_cued then
+        step.rate_cued = nil
+      else
+        step.rate = prev_step.rate
+      end
+      if step.loop_cued then
+        step.loop_cued = nil
+      else
+        step.subdivision = prev_step.subdivision
+        if step.subdivision and step.subdivision > 0 then
+          step.buf_pos = prev_step.buf_pos
+        end
+      end
+      step.mute = false
+    end
   elseif step.lock_pos or step.lock_rate or step.lock_subdivision or looped or p.teleport or was_cued[track] then
     -- print ("playing step", step.buf_pos, step.rate, step.subdivision)
+    if was_cued[track] and mode == MODE_CUE and cue_record_states[track] == RECORD_RECORDING then
+      step.lock_pos = true
+      step.lock_rate = true
+      step.lock_subdivision = true
+    end    
     engine.playStep(track, step.buf_pos, step.rate, step.subdivision or 0)
     p.teleport = false
     was_cued[track] = false
@@ -768,21 +812,36 @@ function manage_selection(z, pressed, selections, persist, persist_only_single)
           tool.apply(pressed.track, active_selection(pressed.track))
         end
       end
-    elseif not persist and selections[pressed.track] ~= nil and apply_tools and mode == MODE_CUE and cue_record_states[pressed.track] ~= MODE_PLAYING then
+    elseif not persist and selections[pressed.track] ~= nil and apply_tools and mode == MODE_CUE and cue_record_states[pressed.track] ~= RECORD_PLAYING then
       if current_selection.last ~= current_selection.first then
         pressed_loop_len = current_selection.last - current_selection.first + 1
       end
       was_cued[pressed.track] = true
       engine.playStep(pressed.track, current_selection.first, playheads[pressed.track].actual_rate, pressed_loop_len)
+      if cue_record_states[pressed.track] == RECORD_RECORDING then
+        local seq_pos = rounded_seq_pos(pressed.track)
+        sequence[pressed.track][seq_pos].buf_pos = current_selection.first
+        sequence[pressed.track][seq_pos].subdivision = pressed_loop_len
+        sequence[pressed.track][seq_pos].lock_pos = true
+        sequence[pressed.track][seq_pos].pos_cued = true
+      end
     end
   end
 end
 
+function rounded_seq_pos(track)
+  tab.print(playheads)
+  print(track)
+  local seq_pos = playheads[track].seq_pos
+  local addition = util.round((clock.get_beats() % playheads[track].division)/playheads[track].division, 1)
+  return seq_pos + addition
+end
+
 function on_loop(track)
-  local state = seq_record_states[track]
+  local state = record_states[track]
   if state == RECORD_RECORDING then
     -- stopping recording and monitoring happens as soon as the next slice plays.
-    seq_record_states[track] = RECORD_PLAYING
+    record_states[track] = RECORD_PLAYING
     -- automatically unmute a track as soon as it finishes recording, since "mute and record" is the trick for "don't overdub"
     if params:get(pn("mute", track)) > 0 then
       params:set(pn("mute", track), 0)
@@ -798,8 +857,9 @@ function on_loop(track)
     amplitudes[track].highest = highestAmp
   elseif state == RECORD_ARMED then
     -- starting recording happens instead of playing a slice.
-    seq_record_states[track] = RECORD_RECORDING
+    record_states[track] = RECORD_RECORDING
   end
+  
 end
 
 function record_press_initiated(track)
@@ -1027,10 +1087,14 @@ function g.key(x, y, z)
 end
 
 function rounded_actual_pos(track)
+  return rounded_actual_pos_units(track, 1)
+end
+
+function rounded_actual_pos_units(track, units)
   local ph = playheads[track]
   local now = clock.get_beats()/ph.division
   local projected = ph.actual_rate * (now-ph.actual_timestamp) + ph.actual_buf_pos + 1 -- actual_buf_pos is 0-indexed for now
-  return util.round(projected, 1)
+  return util.round(projected, units)
 end
 
 function osc_in(path, args, from)
@@ -1051,6 +1115,7 @@ function osc_in(path, args, from)
     local ph = playheads[track]
     ph.actual_buf_pos = pos
     ph.actual_rate = rate
+    ph.actual_loop = loop
     ph.actual_timestamp = clock.get_beats()/ph.division
     ph.buffer_tempo = buf_tempo*60
     grid_dirty = true
