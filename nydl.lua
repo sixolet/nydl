@@ -1518,6 +1518,7 @@ function init()
   end
   clock.run(grid_clock)
   clock.run(screen_clock)
+  params:read(nil)
 end
 
 function enc(n, d)
