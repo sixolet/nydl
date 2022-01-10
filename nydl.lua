@@ -35,8 +35,8 @@ TIME_16TH = 3
 
 -- Crow output modes
 CROW_MODES = {"unassigned", "track 1 loop", "track 2 loop", "track 3 loop", "track 4 loop", 
-  "beat", "eighth note", "eighth triplet", "sixteenth note", "12 ppqn", "24 ppqn", "48 ppqn"}
-CROW_BEAT_DIVISIONS = {nil, nil, nil, nil, nil, 1, 2, 3, 4, 12, 24, 48}
+  "beat", "eighth note", "eighth triplet", "sixteenth note", "12 ppqn", "24 ppqn"}
+CROW_BEAT_DIVISIONS = {nil, nil, nil, nil, nil, 1, 2, 3, 4, 12, 24}
 CROW_LOOP_TRACKS = {nil, 1, 2, 3, 4}
 
 CROW_UNASSIGNED = 1
@@ -174,6 +174,31 @@ function press_stutter(division, track)
   local loop_len = pressed_loop_len > 0 and pressed_loop_len or 4/math.pow(2, cue_mode_time - 1)
   loop_len  = loop_len/division
   engine.playStep(track, pos, playheads[track].actual_rate, loop_len)
+  if cue_record_states[track] == RECORD_RECORDING then
+    local seq_pos = rounded_seq_pos(track)
+    sequence[track][seq_pos].subdivision = loop_len
+    sequence[track][seq_pos].buf_pos = pos
+    sequence[track][seq_pos].lock_loop = true
+    sequence[track][seq_pos].lock_pos = true
+    sequence[track][seq_pos].pos_cued = true
+    sequence[track][seq_pos].loop_cued = true
+  end  
+end
+
+function release_stutter(track)
+  engine.setSynth(track, 'loop', pressed_loop_len)
+  
+  local pos = rounded_actual_pos(track)
+  if cue_record_states[track] == RECORD_RECORDING then
+    local seq_pos = rounded_seq_pos(track)
+    sequence[track][seq_pos].subdivision = pressed_loop_len
+    sequence[track][seq_pos].buf_pos = pos
+    sequence[track][seq_pos].lock_loop = true
+    sequence[track][seq_pos].lock_pos = true
+    sequence[track][seq_pos].pos_cued = true
+    sequence[track][seq_pos].loop_cued = true
+  end  
+  
 end
 
 function sign(x)
@@ -313,9 +338,7 @@ tools = {
     onPress = function(track)
       press_stutter(2, track)
     end,
-    onRelease = function(track)
-      engine.setSynth(track, 'loop', pressed_loop_len)
-    end,
+    onRelease = release_stutter,
   },
   stutter3 = {
     x = 2,
@@ -328,9 +351,7 @@ tools = {
     onPress = function(track)
       press_stutter(3, track)
     end,
-    onRelease = function(track)
-      engine.setSynth(track, 'loop', pressed_loop_len)
-    end,    
+    onRelease = release_stutter,    
   },
   stutter4 = {
     x = 3,
@@ -343,9 +364,7 @@ tools = {
     onPress = function(track)
       press_stutter(4, track)
     end, 
-    onRelease = function(track)
-      engine.setSynth(track, 'loop', pressed_loop_len)
-    end,    
+    onRelease = release_stutter,    
   },
   reverse = {
     x = 2,
@@ -830,8 +849,6 @@ function manage_selection(z, pressed, selections, persist, persist_only_single)
 end
 
 function rounded_seq_pos(track)
-  tab.print(playheads)
-  print(track)
   local seq_pos = playheads[track].seq_pos
   local addition = util.round((clock.get_beats() % playheads[track].division)/playheads[track].division, 1)
   return seq_pos + addition
