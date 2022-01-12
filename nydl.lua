@@ -133,8 +133,8 @@ end
 
 function apply_fx(idx, track, sel)
   if sel == nil then return end
-  print("track", track)
-  tab.print(sel)
+  -- print("track", track)
+  -- tab.print(sel)
   local seq = sequence[track]
   local attr = "fx_"..idx.."_level"
   local global_level = params:get(pn("fx"..idx.."_level", track))
@@ -155,7 +155,7 @@ function cue_fx(idx, track, z)
 end
 
 function cue_rate(rate, track)
-  print("cue rate", rate, track)
+  -- print("cue rate", rate, track)
   engine.setSynth(track, "rate", rate)
   
   if cue_record_states[track] == RECORD_RECORDING then
@@ -316,7 +316,7 @@ tools = {
       if sel ~= nil then
         local ph = playheads[track]
         local offset = ph.seq_pos - ph.loop_start
-        print("looping", track, sel.first, sel.last)
+        -- print("looping", track, sel.first, sel.last)
         params:set(pn("start", track), sel.first)
         params:set(pn("end", track), sel.last)        
         --ph.loop_start = sel.first
@@ -433,8 +433,9 @@ tools = {
           seq[i].lock_pos = false
           seq[i].lock_rate = false
           seq[i].lock_subdivision = false
-          print("cut", i)
-          tab.print(seq[i])
+          seq[i].mute = false
+          -- print("cut", i)
+          -- tab.print(seq[i])
         end
         if pattern_buffer[1].buf_pos ~= seq[sel.first].buf_pos then
           seq[sel.first].lock_pos = true
@@ -573,6 +574,24 @@ function active_section(track)
   end
 end
 
+function set_step_level(track)
+  local p = playheads[track]
+  local step = sequence[track][p.seq_pos]
+  local level = params:get(pn("level", track))
+  if step == nil then print("ret early"); return end
+  if params:get(pn("mute", track)) > 0 then 
+    level = 0
+  end
+  if step.mute then 
+    level = 0 
+  end
+  if not transport then level = 0 end
+  if level ~= p.level then
+    engine.level(track, level)
+    p.level = level
+  end
+end
+
 function advance_playhead(track)
   local p = playheads[track]
   local prev_step = sequence[track][p.seq_pos]
@@ -583,6 +602,7 @@ function advance_playhead(track)
     on_loop(track)
     looped = true
   end
+  set_step_level(track)  
   local step = sequence[track][p.seq_pos]
   if seq_record_states[track] == RECORD_RECORDING then
     p.buf_pos = p.seq_pos
@@ -662,7 +682,7 @@ function advance_playhead(track)
   if looped then
     for i=1,4,1 do
       if CROW_LOOP_TRACKS[params:get("crow_"..i)] == track then
-        print("reset", track)
+        -- print("reset", track)
         crow.output[i].action = "pulse(0.01, 10)"
         crow.output[i]()
       end
@@ -776,12 +796,11 @@ end
 
 function active_selection(track)
   if step_selections[track] ~= nil then
-    print("step sel")
+    -- print("step sel")
     tab.print(step_selections[track])
     return step_selections[track]
   end
   local section_sel = section_selections[track]
-  print("section_sel", section_sel)
   if section_sel ~= nil and next(section_sel.held) ~= nil then
     return {
       first = mul_but_oneindex(section_sel.first, 16),
@@ -1059,7 +1078,14 @@ function g.key(x, y, z)
   -- Mute
   if z == 1 and x == 5 and y%2 == 0 then
     local track = div_but_oneindex(y, 2)
-    params:set(pn("mute", track), params:get(pn("mute", track)) > 0 and 0 or 1)
+    local sel = active_selection(track)
+    if sel ~= nil and next(sel.held) ~= nil then
+      for i=sel.first,sel.last,1 do
+        sequence[track][i].mute = not sequence[track][i].mute
+      end
+    else
+      params:set(pn("mute", track), params:get(pn("mute", track)) > 0 and 0 or 1)
+    end
   end
   -- Tools
   local tool = lookup_tool(x, y, mode)
@@ -1263,9 +1289,9 @@ function grid_redraw()
       local level = BACKGROUND
       local highest = amplitudes[step.track].highest or 1
       local lowest = amplitudes[step.track].lowest or 0.00001
-      local range = math.log(highest/lowest)      
+      local range = math.log(highest/lowest)
+      local step_data = sequence[step.track][step.index]
       if mode == MODE_SEQUENCE then
-        local step_data = sequence[step.track][step.index]
         local amp1 = amplitudes[step.track][mul_but_oneindex(step_data.buf_pos, 2)] or 0.000001
         local amp2 = amplitudes[step.track][mul_but_oneindex(step_data.buf_pos, 2) + 1] or 0.000001
         local logAmp = math.log( (amp1+amp2) / (2*highest) )
@@ -1288,6 +1314,9 @@ function grid_redraw()
           level = math.max(level, SELECTED)
         end
       end
+      if mode == MODE_SEQUENCE and step_data.mute then
+        level = 0
+      end      
       if mode == MODE_SEQUENCE and step.index == playhead.seq_pos then
         level = ACTIVE
       end
@@ -1413,11 +1442,13 @@ function init()
     amp_spec.default = 1.0
     params:add_control(pn("level", track), "level", amp_spec)
     params:set_action(pn("level", track), function(level)
-      engine.level(track, params:get(pn("mute", track)) > 0 and 0 or level)
+      set_step_level(track)
+      --engine.level(track, params:get(pn("mute", track)) > 0 and 0 or level)
     end)
     params:add_binary(pn("mute", track), "mute", "toggle", 0)
     params:set_action(pn("mute", track), function(mute)
-      engine.level(track, mute > 0 and 0 or params:get(pn("level", track)))
+      set_step_level(track)
+      --engine.level(track, mute > 0 and 0 or params:get(pn("level", track)))
     end)
     params:add_trigger(pn("reset", track), "reset")
     params:set_action(pn("reset", track), function () 
@@ -1534,7 +1565,9 @@ end
 function clock.transport.start()
   print("started transport")
   transport = true
-  params:bang()
+  for track=1,4,1 do
+    set_step_level(track)
+  end
 end
 
 function clock.transport.stop()
