@@ -156,10 +156,22 @@ end
 function cue_fx(idx, track, z)
   local global_level = params:get(pn("fx"..idx.."_level", track))
   local global_on = params:get(pn("fx"..idx.."_on", track)) > 0
+  local pos = rounded_seq_pos(track)
+  local attr = "fx_"..idx.."_level"
+  local level
   if (z == 1) == global_on then
     engine.setFx(track, idx, "level", 0)
+    level = 0
   else
     engine.setFx(track, idx, "level", global_level)
+    level = global_level
+  end
+  if z == 1 and cue_record_states[track] == RECORD_RECORDING then
+    -- print('pos', pos)
+    -- print(sequence)
+    -- print(sequence[track])
+    -- print(sequence[track][pos])
+    sequence[track][pos][attr] = level
   end
 end
 
@@ -655,6 +667,15 @@ function advance_playhead(track)
         step.lock_subdivision = false
       end
       step.mute = false
+      if tools.fx1.pressed then
+        cue_fx(1, track, 1)
+      end
+      if tools.fx2.pressed then
+        cue_fx(2, track, 1)
+      end
+      if tools.fx3.pressed then
+        cue_fx(3, track, 1)
+      end
     end
   elseif step.lock_pos or step.lock_rate or step.lock_subdivision or looped or p.teleport or was_cued[track] then
     -- print ("playing step", step.buf_pos, step.rate, step.subdivision)
@@ -1157,7 +1178,10 @@ function rounded_actual_pos_units(track, units)
   local ph = playheads[track]
   local now = clock.get_beats()/ph.division
   local projected = ph.actual_rate * (now-ph.actual_timestamp) + ph.actual_buf_pos + 1 -- actual_buf_pos is 0-indexed for now
-  return util.round(projected, units)
+  local ret = util.round(projected, units)
+  if ret > 64 then
+    ret = ret - 64
+  end
 end
 
 function osc_in(path, args, from)
