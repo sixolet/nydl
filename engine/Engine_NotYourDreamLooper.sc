@@ -389,10 +389,10 @@ Engine_NotYourDreamLooper : CroneEngine {
 			});
 		});
 
-		this.addCommand("load", "isf", { |msg|
+		this.addCommand("loadTrack", "isf", { |msg|
 			var track = msg[1].asInteger - 1;
-			var fileName = msg[3].asString;
-			var fileTempo = msg[4].asFloat;
+			var fileName = msg[2].asString;
+			var fileTempo = msg[3].asFloat;
 			if (tracks != nil, {
 				tracks[track].load(fileName, fileTempo);
 			});

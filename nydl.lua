@@ -1359,6 +1359,16 @@ end
 crow_known_tempo = nil
 crow_known_div = {nil, nil, nil, nil}
 
+function bpm_in_string(s)
+  for w in string.gmatch(s, "%d+") do
+    local bpm = tonumber(w)
+    if bpm >= 45 and bpm <= 240 then
+      return bpm
+    end
+  end
+  return nil
+end
+
 function crow_every_beat()
   while true do
     clock.sync(1)
@@ -1404,7 +1414,7 @@ function init()
   end)
   params:add_trigger("reset_all", "reset all")
   params:set_action("reset_all", reset_all)
-  params:add_binary("reset_on_transport", "toggle", 1)
+  params:add_binary("reset_on_transport", "reset on transport", "toggle", 1)
   params:add_number(
     "reset_all_every", 
     "reset every", 
@@ -1432,13 +1442,22 @@ function init()
   end)
   params:add_separator("tracks")
   for track=1,4,1 do
-    params:add_group("track "..track, 22)
+    params:add_group("track "..track, 23)
     params:add_option(pn("div", track), "division", DIV_OPTIONS, 1)
     params:set_action(pn("div", track), function (opt)
       local div = DIV_VALUES[opt]
       if div ~= playheads[track].division then
         engine.realloc(track, div)
         playheads[track].division = div
+      end
+    end)
+    params:add_file(pn("load", track), "load")
+    params:set_action(pn("load", track), function (filename)
+      if filename ~= nil and filename ~= "" and filename ~= "-" then
+        print("calc bpm", filename)
+        local bpm = bpm_in_string(filename) or clock.get_tempo()
+        print("trying to load", filename, "at", bpm)
+        engine.loadTrack(track, filename, bpm/60)
       end
     end)
     params:add_number(pn("start", track), "loop start", 1, 64, 1)
