@@ -1534,11 +1534,15 @@ end
 function clock.transport.start()
   print("started transport")
   transport = true
+  params:bang()
 end
 
 function clock.transport.stop()
   print ("stopped transport")
   transport = false
+  for track=1,4,1 do
+    engine.level(track, 0)
+  end
   if params:get("reset_on_transport") > 0 then
     reset_all()
   end
