@@ -1211,22 +1211,22 @@ function grid_mini_redraw()
   elseif grid_breathe <= 2 then
     grid_breathe_incr = 1
   end
-  
+  local beats = clock.get_beats()
   -- Per track
   for track=1,4,1 do
     local record_x = 5
     local record_y = mul_but_oneindex(track, 2)
     local state = record_states[track]
     if state == RECORD_PLAYING then
-      g:led(record_x, record_y, INACTIVE)
+      g:led(record_x, record_y, INACTIVE + 1 - math.floor(3*(beats % 1)))
     elseif state == RECORD_MONITORING then
-      g:led(record_x, record_y, SELECTED)
+      g:led(record_x, record_y, SELECTED + 2 - math.floor(4*(beats % 1)))
     elseif state == RECORD_RESAMPLING then
       g:led(record_x, record_y, grid_breathe <= 12 and SELECTED or 0)
     elseif state == RECORD_ARMED then
       g:led(record_x, record_y, SELECTED*grid_flash)
     elseif state == RECORD_RECORDING then
-      g:led(record_x, record_y, grid_breathe)
+      g:led(record_x, record_y, ACTIVE - math.floor( 15*math.abs(1 - beats % 2)))
     elseif state == RECORD_SOS then
       g:led(record_x, record_y, ACTIVE)
     end
