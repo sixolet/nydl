@@ -53,6 +53,7 @@ CROW_SIXTEENTH = 9
 --CROW_48PPQN = 12
 
 -- Global script data
+transport = true
 sequence = { {}, {}, {}, {} }
 amplitudes = { {}, {}, {}, {} }
 pattern_buffer = nil
@@ -746,7 +747,9 @@ function sequencer_clock(track)
   -- Start at a (plausible) measure line.
   clock.sync(4)
   while true do
-    advance_playhead(track)
+    if transport then
+      advance_playhead(track)
+    end
     clock.sync(playheads[track].division)
   end
 end
@@ -1362,6 +1365,7 @@ function init()
   end)
   params:add_trigger("reset_all", "reset all")
   params:set_action("reset_all", reset_all)
+  params:add_binary("reset_on_transport", "toggle", 1)
   params:add_number(
     "reset_all_every", 
     "reset every", 
@@ -1524,6 +1528,19 @@ end
 function enc(n, d)
   if n == 1 then
     screen_track = mod_but_oneindex(math.floor(screen_track + d), 4)
+  end
+end
+
+function clock.transport.start()
+  print("started transport")
+  transport = true
+end
+
+function clock.transport.stop()
+  print ("stopped transport")
+  transport = false
+  if params:get("reset_on_transport") > 0 then
+    reset_all()
   end
 end
 
