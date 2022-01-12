@@ -44,6 +44,32 @@ NydlTrack {
 			server, track, division, sendBus, buffer, bufferTempo, nil, nil, false, 1, toFx, fx, fxControls, nil);
 	}
 
+	load { |filename, fileTempo|
+		Buffer.read(server, filename, action: { |buf|
+			var oldBuf = buffer;
+			buffer = buf;
+			bufferTempo = fileTempo;
+			Routine.new({
+				(16*division).yield;
+				oldBuf.free;
+			}).play;
+		});
+	}
+
+	realloc { |div|
+		var tempo = TempoClock.tempo;
+		var oldBuf = buffer;
+		var oldDiv = division;
+		var buf = Buffer.alloc(server, server.sampleRate*((64*div/tempo) + 1), 2);
+		buffer = buf;
+		bufferTempo = tempo;
+		division = div;
+		Routine.new({
+			(16*oldDiv).yield;
+			oldBuf.free;
+		}).play;
+	}
+
 	out {
 		^toFx[3];
 	}
@@ -362,6 +388,22 @@ Engine_NotYourDreamLooper : CroneEngine {
 				luaOscAddr.sendMsg("/resampleDone", track+1);
 			});
 		});
+
+		this.addCommand("load", "isf", { |msg|
+			var track = msg[1].asInteger - 1;
+			var fileName = msg[3].asString;
+			var fileTempo = msg[4].asFloat;
+			if (tracks != nil, {
+				tracks[track].load(fileName, fileTempo);
+			});
+		});
+
+		this.addCommand("realloc", "if", { |msg|
+			var track = msg[1].asInteger - 1;
+			var div = msg[2].asFloat;
+			tracks[track].realloc(div);
+		});
+
 
 		this.addCommand("level", "if", { |msg|
 			var track = msg[1].asInteger - 1;

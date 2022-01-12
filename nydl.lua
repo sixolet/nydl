@@ -33,6 +33,15 @@ TIME_QTR = 1
 TIME_8TH = 2
 TIME_16TH = 3
 
+-- Loop length/division paramters
+
+DIV_16TH = 1
+DIV_8TH = 2
+DIV_QTR = 3
+
+DIV_OPTIONS = { "4 bars of 16th", "8 bars of 8th", "16 bars of quarter"}
+DIV_VALUES = { 0.25, 0.5, 1 }
+
 -- Crow output modes
 CROW_MODES = {"unassigned", "track 1 loop", "track 2 loop", "track 3 loop", "track 4 loop", 
   "beat", "eighth note", "eighth triplet", "sixteenth note"}
@@ -1423,7 +1432,15 @@ function init()
   end)
   params:add_separator("tracks")
   for track=1,4,1 do
-    params:add_group("track "..track, 21)
+    params:add_group("track "..track, 22)
+    params:add_option(pn("div", track), "division", DIV_OPTIONS, 1)
+    params:set_action(pn("div", track), function (opt)
+      local div = DIV_VALUES[opt]
+      if div ~= playheads[track].division then
+        engine.realloc(track, div)
+        playheads[track].division = div
+      end
+    end)
     params:add_number(pn("start", track), "loop start", 1, 64, 1)
     params:set_action(pn("start", track), function(pos)
         playheads[track].loop_start = pos
