@@ -579,13 +579,15 @@ function set_step_level(track)
   local step = sequence[track][p.seq_pos]
   local level = params:get(pn("level", track))
   if step == nil then print("ret early"); return end
-  if params:get(pn("mute", track)) > 0 then 
-    level = 0
+  if not transport then level = 0 end  
+  if not track_cued(track) then
+    if params:get(pn("mute", track)) > 0 then 
+      level = 0
+    end
+    if step.mute then 
+      level = 0 
+    end
   end
-  if step.mute then 
-    level = 0 
-  end
-  if not transport then level = 0 end
   if level ~= p.level then
     engine.level(track, level)
     p.level = level
@@ -818,7 +820,6 @@ function manage_selection(z, pressed, selections, persist, persist_only_single)
       -- Begin selection
       local held = {}
       held[pressed.index] = true
-      print ("begin selection")
       selections[pressed.track] = {
         first = pressed.index,
         last = pressed.index,
