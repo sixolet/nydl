@@ -195,6 +195,7 @@ function press_stutter(division, track)
   end
   local loop_len = pressed_loop_len > 0 and pressed_loop_len or 4/math.pow(2, cue_mode_time - 1)
   loop_len  = loop_len/division
+  print("press stutter", track, pos, playheads[track].actual_rate, loop_len)
   engine.playStep(track, pos, playheads[track].actual_rate, loop_len)
   if cue_record_states[track] == RECORD_RECORDING then
     local seq_pos = rounded_seq_pos(track)
@@ -208,6 +209,7 @@ function press_stutter(division, track)
 end
 
 function release_stutter(track)
+  print("release stutter")
   engine.setSynth(track, 'loop', pressed_loop_len)
   
   local pos = rounded_actual_pos(track)
@@ -236,6 +238,19 @@ tools = {
     x = 2,
     y = 2,
     modes =  {MODE_SEQUENCE, MODE_CUE},
+    apply = function(track, sel)
+      if mode == MODE_SEQUENCE then
+        local seq = sequence[track]
+        if sel == nil then return end
+        
+        seq[sel.first].stall = sel.last - sel.first + 1
+
+        if sel.last < 64 then
+          seq[sel.last + 1].lock_pos = true
+          seq[sel.last + 1].lock_rate = true
+        end        
+      end
+    end,    
   },
   
   fx1 = {
@@ -711,6 +726,11 @@ function advance_playhead(track)
     end
   end
   
+  if step.stall and step.stall > 0 then
+    engine.setSynth(track, 'rateLag', step.stall)
+    engine.setSynth(track, 'rate', 0)
+  end
+  
   if looped then
     for i=1,4,1 do
       if CROW_LOOP_TRACKS[params:get("crow_"..i)] == track then
@@ -820,8 +840,7 @@ end
 
 function screen_clock()
   while true do
-    clock.sync(1/8.0)
-    clock.sleep(1/30.0)
+    clock.sleep(1/params:get("framerate"))
     redraw()
   end
 end
@@ -1182,6 +1201,7 @@ function rounded_actual_pos_units(track, units)
   if ret > 64 then
     ret = ret - 64
   end
+  return ret
 end
 
 function osc_in(path, args, from)
@@ -1453,6 +1473,9 @@ function init()
       end
     end,
     false)
+  params:add_group("display (ico clock badness)", 2)
+  params:add_binary("display_sequence", "display sequence", "toggle", 1)
+  params:add_number("framerate", "framerate", 1, 15, 10)
   clock.run(function ()
     while true do
       local every = params:get("reset_all_every")
@@ -1674,33 +1697,34 @@ function redraw()
       screen.stroke()
       
       -- The sequence
-      local playhead = playheads[track]
-      screen.move(slice, track_start_y+10)
-      local seq_pos = div_but_oneindex(slice, 2)
-      local step = sequence[track][seq_pos]
-      local begin = slice % 2 > 0
-      local loop_divisor = 1
-      screen.level(1)
-      if seq_pos >= playhead.loop_start and seq_pos <= playhead.loop_end then
-        screen.level(2)
-      else
-        loop_divisor = 2
-      end
-      if step.buf_pos ~= seq_pos or step.rate ~= 1 then
-        screen.level(4/loop_divisor)
-      end      
-      if (step.lock_pos or step.lock_rate) and begin then
-        screen.level(10/loop_divisor)
-      end
-      if step.mute then
-        screen.level(0)
-      end
-      if seq_pos == playhead.seq_pos then
-        screen.level(15)
-      end
-      screen.line_rel(0, 2)
-      screen.stroke()
-      
+      if params:get("display_sequence") > 0 then
+        local playhead = playheads[track]
+        screen.move(slice, track_start_y+10)
+        local seq_pos = div_but_oneindex(slice, 2)
+        local step = sequence[track][seq_pos]
+        local begin = slice % 2 > 0
+        local loop_divisor = 1
+        screen.level(1)
+        if seq_pos >= playhead.loop_start and seq_pos <= playhead.loop_end then
+          screen.level(2)
+        else
+          loop_divisor = 2
+        end
+        if step.buf_pos ~= seq_pos or step.rate ~= 1 then
+          screen.level(4/loop_divisor)
+        end      
+        if (step.lock_pos or step.lock_rate) and begin then
+          screen.level(10/loop_divisor)
+        end
+        if step.mute then
+          screen.level(0)
+        end
+        if seq_pos == playhead.seq_pos then
+          screen.level(15)
+        end
+        screen.line_rel(0, 2)
+        screen.stroke()
+      end    
     end
     if track == screen_track then
       screen.move(0, track_start_y + 5)
