@@ -974,7 +974,7 @@ function record_pressed(track)
   elseif state == RECORD_MONITORING then
     record_states[track] = RECORD_ARMED
   elseif state == RECORD_ARMED then
-    -- pass ?
+    record_states[track] = RECORD_MONITORING
   elseif state == RECORD_RECORDING then
     -- pass ?
   elseif state == RECORD_RESAMPLING then
@@ -1331,9 +1331,9 @@ function grid_redraw()
         local logAmp = math.log( (amp1+amp2) / (2*highest) )
         
         if step.index >= playhead.loop_start and step.index <= playhead.loop_end then
-          level = math.max(level, 12 + math.floor(12*logAmp/range), IN_LOOP)
+          level = math.min(math.max(level, math.floor(12*(amp1+amp2)/highest), IN_LOOP), 15)
         else
-          level = math.max(level, 6 + math.floor(6*logAmp/range), level)          
+          level = math.max(level, math.floor(6*(amp1+amp2)/highest), level)          
         end
       end
       if mode == MODE_CUE then
@@ -1657,13 +1657,13 @@ function redraw()
   for track=1,4,1 do
     -- The audio
     local track_start_y = mul_but_oneindex(track, 14)
-    
-    for slice=1,127,1 do
+    local highest = amplitudes[track].highest or 1
+    for slice=1,128,1 do
       local lamp = 1
       if amplitudes[track][slice] ~= nil then
-        lamp = math.max(8+math.log(amplitudes[track][slice]), 1)        
+        lamp = math.max(8*amplitudes[track][slice]/highest, 1)-- math.max(8+math.log(amplitudes[track][slice]), 1)        
       end
-      screen.move(slice, track_start_y+4)
+      screen.move(slice-1, track_start_y+5)
       screen.move_rel(0, lamp/2)
       local level = 5
       if params:get(pn("mute", track)) > 0 then
@@ -1672,7 +1672,35 @@ function redraw()
       screen.level(level)
       screen.line_rel(0, -1 * lamp)
       screen.stroke()
-      screen.level(0)
+      
+      -- The sequence
+      local playhead = playheads[track]
+      screen.move(slice, track_start_y+10)
+      local seq_pos = div_but_oneindex(slice, 2)
+      local step = sequence[track][seq_pos]
+      local begin = slice % 2 > 0
+      local loop_divisor = 1
+      screen.level(1)
+      if seq_pos >= playhead.loop_start and seq_pos <= playhead.loop_end then
+        screen.level(2)
+      else
+        loop_divisor = 2
+      end
+      if step.buf_pos ~= seq_pos or step.rate ~= 1 then
+        screen.level(4/loop_divisor)
+      end      
+      if (step.lock_pos or step.lock_rate) and begin then
+        screen.level(10/loop_divisor)
+      end
+      if step.mute then
+        screen.level(0)
+      end
+      if seq_pos == playhead.seq_pos then
+        screen.level(15)
+      end
+      screen.line_rel(0, 2)
+      screen.stroke()
+      
     end
     if track == screen_track then
       screen.move(0, track_start_y + 5)
