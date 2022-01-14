@@ -44,14 +44,23 @@ NydlTrack {
 			server, track, division, sendBus, buffer, bufferTempo, nil, nil, false, 1, toFx, fx, fxControls, nil);
 	}
 
-	load { |filename, fileTempo|
+	load { |filename, fileTempo, cb|
 		Buffer.read(server, filename, action: { |buf|
 			var oldBuf = buffer;
+			var readAmp;
 			buffer = buf;
 			bufferTempo = fileTempo;
+			readAmp = Synth(\readAmp, [
+				buf: buffer,
+				tempo: fileTempo,
+				division: division,
+				gate: 1,
+				track: track]);
 			Routine.new({
-				(16*division).yield;
+				((64 + 16)*division).yield;
 				oldBuf.free;
+				readAmp.set(\gate, 0);
+				cb.value;
 			}).play;
 		});
 	}
@@ -302,6 +311,24 @@ Engine_NotYourDreamLooper : CroneEngine {
 			Out.ar(out, env * level.lag(0.01) * SoundIn.ar([0, 1]));
 		}).add;
 
+		SynthDef.new(\readAmp, {|buf, tempo, division, gate=1, track=1|
+
+			var stepSize = SampleRate.ir * (division/tempo);
+			var start = 0;
+			var env = EnvGen.kr(fadeEnv, gate, doneAction: Done.freeSelf);
+
+			var bufPlay = PlayBuf.ar(2, buf, rate: 1.0, startPos: start, loop: 1.0);
+			var ampPulse = Impulse.kr(tempo*2/division);
+			var ampCounter = PulseCount.kr(ampPulse);
+			var pwr = (RunningSum.ar((Mix.ar((bufPlay))/2).squared, (stepSize/2)) / (stepSize/2)).sqrt;
+
+			SendReply.kr(
+				(ampCounter > 1).if(ampPulse, 0),
+				'/recordAmplitude',
+				[track, ampCounter-1, pwr]
+			);
+		}).add;
+
 		SynthDef.new(\record, {|out, buf, tempo, pos, division, gate=1, level=1, track=1|
 
 			var in = SoundIn.ar([0, 1]);
@@ -398,7 +425,9 @@ Engine_NotYourDreamLooper : CroneEngine {
 			if (tracks == nil, {
 				this.initTracks;
 			});
-			tracks[track].load(fileName, fileTempo);
+			tracks[track].load(fileName, fileTempo, {
+				luaOscAddr.sendMsg("/readAmpDone", track+1);
+			});
 		});
 
 		this.addCommand("saveTrack", "is", { |msg|
@@ -406,7 +435,7 @@ Engine_NotYourDreamLooper : CroneEngine {
 			var filePrefix = msg[2].asString;
 			var fileName = filePrefix ++ " " ++ (60*tracks[track].bufferTempo).asStringPrec(3) ++ "bpm.aiff";
 			tracks[track].buffer.write(fileName, headerFormat: "aiff", sampleFormat: "float");
-			luaOscAddr.sendMsg("/wrote", track, fileName);
+			luaOscAddr.sendMsg("/wrote", track+1, fileName);
 		});
 
 		this.addCommand("realloc", "if", { |msg|

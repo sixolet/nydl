@@ -944,6 +944,18 @@ function rounded_seq_pos(track)
   return seq_pos + addition
 end
 
+function normalize_amp(track)
+  -- calculate the min and max amplitudes
+  local lowestAmp = 1
+  local highestAmp = 0.00001
+  for i=1,129,1 do
+    lowestAmp = math.min(amplitudes[track][i] or 1, lowestAmp)
+    highestAmp = math.max(amplitudes[track][i] or 0.00001, highestAmp)
+  end
+  amplitudes[track].lowest = lowestAmp
+  amplitudes[track].highest = highestAmp
+end
+
 function on_loop(track)
   local state = record_states[track]
   if state == RECORD_RECORDING then
@@ -953,15 +965,7 @@ function on_loop(track)
     if params:get(pn("mute", track)) > 0 then
       params:set(pn("mute", track), 0)
     end
-    -- calculate the min and max amplitudes
-    local lowestAmp = 1
-    local highestAmp = 0.00001
-    for i=1,129,1 do
-      lowestAmp = math.min(amplitudes[track][i] or 1, lowestAmp)
-      highestAmp = math.max(amplitudes[track][i] or 0.00001, highestAmp)
-    end
-    amplitudes[track].lowest = lowestAmp
-    amplitudes[track].highest = highestAmp
+    normalize_amp(track)
   elseif state == RECORD_ARMED then
     -- starting recording happens instead of playing a slice.
     record_states[track] = RECORD_RECORDING
@@ -1247,11 +1251,14 @@ function osc_in(path, args, from)
     if record_states[track] == RECORD_RESAMPLING then
       record_states[track] = RECORD_MONITORING
     end
+  elseif path == "/readAmpDone" then
+    local track = args[1]
+    normalize_amp(track)
   elseif path == "/wrote" then
-    local track = args[1] + 1
+    local track = args[1]
     local filename = args[2]
     params:set(pn("load", track), filename, true)
-    tracks_written = tracks_written + 1
+    tracks_written = tracks_written
     if tracks_written == 4 then
       print("Saving params", params:get("save_as"))
       params:write(params:get("save_as"))
@@ -1725,7 +1732,7 @@ function redraw()
     local highest = amplitudes[track].highest or 1
     for slice=1,128,1 do
       local lamp = 1
-      if amplitudes[track][slice] ~= nil then
+      if amplitudes[track][slice] ~= nil and amplitudes[track][slice] > 0 then
         lamp = math.max(8*amplitudes[track][slice]/highest, 1)-- math.max(8+math.log(amplitudes[track][slice]), 1)        
       end
       screen.move(slice-1, track_start_y+5)
