@@ -1076,6 +1076,7 @@ end
 
 function g.key(x, y, z)
   -- mode selector
+  screen.ping()
   if z == 1 and x == 1 and y == 1 then
     if any_recording() then
       return
