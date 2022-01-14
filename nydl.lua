@@ -89,6 +89,8 @@ mode = MODE_SEQUENCE
 cached_tempo = nil
 pressed_loop_len = 0
 
+tracks_written = 0
+
 -- Screen interface globals
 screen_track = 1
 
@@ -248,9 +250,18 @@ tools = {
         if sel.last < 64 then
           seq[sel.last + 1].lock_pos = true
           seq[sel.last + 1].lock_rate = true
-        end        
+        end     
       end
-    end,    
+    end,
+    onPress = function (track)
+      local stall_len = pressed_loop_len > 0 and pressed_loop_len or 4/math.pow(2, cue_mode_time - 1)
+      engine.setSynth(track, "rateLag", stall_len)
+      engine.setSynth(track, "rate", 0)
+      if cue_record_states[track] == RECORD_RECORDING then
+        local seq_pos = rounded_seq_pos(track)
+        sequence[track][seq_pos].stall = stall_len
+      end
+    end,
   },
   
   fx1 = {
@@ -1236,6 +1247,16 @@ function osc_in(path, args, from)
     if record_states[track] == RECORD_RESAMPLING then
       record_states[track] = RECORD_MONITORING
     end
+  elseif path == "/wrote" then
+    local track = args[1] + 1
+    local filename = args[2]
+    params:set(pn("load", track), filename, true)
+    tracks_written = tracks_written + 1
+    if tracks_written == 4 then
+      print("Saving params", params:get("save_as"))
+      params:write(params:get("save_as"))
+      tracks_written = 0
+    end
   end
 end
 
@@ -1487,6 +1508,27 @@ function init()
       end
     end
   end)
+  
+  params:add_group("storage", 3)
+  params:add_file("sequence_file", "sequence file")
+  params:set_action("sequence_file", function(filename)
+    sequence = tab.load(filename)
+  end)
+  params:add_number("save_as", "save as pset", 1, 32, 1)
+  params:add_trigger("save", "save")
+  params:set_action("save", function () 
+    local i = params:get("save_as")
+    local seq_filename = _path.data .. "sequence_" .. i .. ".nydl"
+    tab.save(sequence, seq_filename)
+    params:set("sequence_file", seq_filename, true)
+    if not util.file_exists(_path.audio .. "nydl") then
+      util.make_dir(_path.audio .. "nydl")
+    end
+    for track=1,4,1 do
+      engine.saveTrack(track, _path.audio .. "nydl/" .. "pset " .. i .. " track " .. track)
+    end
+  end)
+
   params:add_separator("tracks")
   for track=1,4,1 do
     params:add_group("track "..track, 23)
@@ -1658,7 +1700,7 @@ function clock.transport.stop()
   print ("stopped transport")
   transport = false
   for track=1,4,1 do
-    engine.level(track, 0)
+    set_step_level(track)
   end
   if params:get("reset_on_transport") > 0 then
     reset_all()

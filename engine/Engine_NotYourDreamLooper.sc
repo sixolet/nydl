@@ -220,6 +220,7 @@ Engine_NotYourDreamLooper : CroneEngine {
 	}
 
 	initTracks {
+		"init tracks".postln;
 		tracks = 4.collect { |i|
 			NydlTrack.new(Server.default, i+1, 0.25, sendBus, nil, nil, nil);
 		};
@@ -393,9 +394,19 @@ Engine_NotYourDreamLooper : CroneEngine {
 			var track = msg[1].asInteger - 1;
 			var fileName = msg[2].asString;
 			var fileTempo = msg[3].asFloat;
-			if (tracks != nil, {
-				tracks[track].load(fileName, fileTempo);
+			"load % % %\n".postf(track, fileName, fileTempo);
+			if (tracks == nil, {
+				this.initTracks;
 			});
+			tracks[track].load(fileName, fileTempo);
+		});
+
+		this.addCommand("saveTrack", "is", { |msg|
+			var track = msg[1].asInteger - 1;
+			var filePrefix = msg[2].asString;
+			var fileName = filePrefix ++ " " ++ (60*tracks[track].bufferTempo).asStringPrec(3) ++ "bpm.aiff";
+			tracks[track].buffer.write(fileName, headerFormat: "aiff", sampleFormat: "float");
+			luaOscAddr.sendMsg("/wrote", track, fileName);
 		});
 
 		this.addCommand("realloc", "if", { |msg|
