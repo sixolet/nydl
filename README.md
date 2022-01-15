@@ -138,6 +138,9 @@ while recording.
 
 ## The Sigil
 
+![](img/edit-sigil.png)
+![](img/cue-sigil.png)
+
 The sigil is full of tools, and it looks slightly different between edit and cue
 modes. Here's a rundown.
 
