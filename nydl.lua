@@ -67,8 +67,9 @@ EK3_RESET = 3 -- reset all, no enc meaning
 EK3_FX1 = 4
 EK3_FX2 = 5
 EK3_FX3 = 6
+EK3_CLEAR = 7
 
-EK3_OPTIONS = {"level", "loop", "reset", "fx1", "fx2", "fx3"}
+EK3_OPTIONS = {"level", "loop", "reset", "fx1", "fx2", "fx3", "clear"}
 
 k3_pressed = false
 
@@ -104,7 +105,7 @@ tracks_written = 0
 
 -- Screen interface globals
 screen_track = 1
-
+drain = 0
 
 function apply_rate(rate, track, sel)
   if sel == nil then return end
@@ -863,6 +864,9 @@ end
 
 function screen_clock()
   while true do
+    if drain > 0 then
+      drain = drain - 1
+    end
     clock.sleep(1/15.0)
     redraw()
   end
@@ -1510,6 +1514,17 @@ function reset_all()
   end
 end
 
+function clear_track(track)
+  engine.realloc(track, playheads[track].division)
+  for i=1,128,1 do
+    amplitudes[track][i] = 0
+  end
+  amplitudes[track].rectangle = nil
+  amplitudes[track].dark_rectangle = nil
+  amplitudes[track].highest = nil
+  playheads[track].teleport = true
+end
+
 function init()
   params:add_separator("general")
   params:add_binary("metronome", "metronome", "toggle", 0)
@@ -1568,7 +1583,7 @@ function init()
 
   params:add_separator("tracks")
   for track=1,4,1 do
-    params:add_group("track "..track, 23)
+    params:add_group("track "..track, 24)
     params:add_option(pn("div", track), "division", DIV_OPTIONS, 1)
     params:set_action(pn("div", track), function (opt)
       local div = DIV_VALUES[opt]
@@ -1616,6 +1631,10 @@ function init()
     params:add_trigger(pn("reset", track), "reset")
     params:set_action(pn("reset", track), function () 
       reset_track(track)
+    end)
+    params:add_trigger(pn("clear", track), "clear")
+    params:set_action(pn("clear", track), function () 
+      clear_track(track)
     end)
     -- FX
     params:add_separator("decimate")
@@ -1719,9 +1738,6 @@ function init()
   params:read(nil)
 end
 
-EK3_OPTIONS = {"level", "loop", "reset", "fx1", "fx2", "fx3"}
-
-
 function adjust_param_by(param, delta)
   local raw = params:get_raw(param)
   raw = raw + delta/100
@@ -1737,7 +1753,7 @@ function enc(n, d)
   if n == 1 then
     screen_track = mod_but_oneindex(math.floor(screen_track + d), 4)
   elseif n == 2 then
-    params:set("ek3", mod_but_oneindex(params:get("ek3") + d, #EK3_OPTIONS))
+    params:set("ek3", mod_but_oneindex(params:get("ek3") + d, #EK3_OPTIONS + 1))
   elseif n == 3 then
     local ek3 = params:get("ek3")
     if ek3 == EK3_LEVEL then
@@ -1797,6 +1813,18 @@ function enc(n, d)
       adjust_param_by(pn("fx2_cutoff", screen_track), d)
     elseif ek3 == EK3_FX3 then
       adjust_param_by("send_delay", d)
+    elseif ek3 == EK3_CLEAR then
+      drain = drain + 15*d
+      if drain > 100 then
+        drain = 0
+        if k3_pressed then
+          for i=1,4,1 do
+            clear_track(i)
+          end
+        else
+          clear_track(screen_track)
+        end
+      end
     end
   end
 end
@@ -1843,6 +1871,8 @@ function key(n, z)
         params:set(pn("fx2_on", screen_track),  1 - params:get(pn("fx2_on", screen_track)))
       elseif ek3 == EK3_FX3 then
         params:set(pn("fx3_on", screen_track),  1 - params:get(pn("fx3_on", screen_track)))
+      elseif ek3 == EK3_CLEAR then
+        -- pass
       end
     else
       k3_pressed = false
@@ -1943,9 +1973,13 @@ function redraw()
     screen.move(ph.actual_buf_pos*2, track_start_y)
     screen.level(15)
     screen.line_rel(0, 9)
+    screen.stroke()
+    screen.rect((ph.seq_pos - 1)*2, track_start_y+10, 2, 2)
+    screen.fill()
   end
   local k2_text = ""
   local mode_text = ""
+  local value = 0
   if mode == MODE_SEQUENCE then
     if params:get(pn("mute", screen_track)) > 0 then
       if record_states[screen_track] == RECORD_PLAYING then
@@ -2004,6 +2038,7 @@ function redraw()
   local ek3 = params:get("ek3")
   if ek3 == EK3_LEVEL then
     ek3_text = "k3:mute e3:lvl"
+    value = params:get(pn("level", screen_track))
   elseif ek3 == EK3_LOOP then
     if k3_pressed then
       ek3_text = "k3:* e3:loop-len"
@@ -2014,19 +2049,32 @@ function redraw()
     ek3_text = "k3:reset"
   elseif ek3 == EK3_FX1 then
     ek3_text = "k3:redx e3:freq"
+    value = params:get_raw(pn("fx1_rate", screen_track))
   elseif ek3 == EK3_FX2 then
     ek3_text = "k3:filt e3:freq"
+    value = params:get_raw(pn("fx2_cutoff", screen_track))
   elseif ek3 == EK3_FX3 then
     ek3_text = "k3:send e3:delay"
+    value = params:get_raw("send_delay")
+  elseif ek3 == EK3_CLEAR then
+    if k3_pressed then
+      ek3_text = "k3:* e3:clear-all"
+    else
+      ek3_text = "k3:* e3:clear"
+    end
+    value = drain/100
   end
-  screen.move(0, 60)
+  screen.move(0, 62)
   screen.font_face(25) -- second best, and slightly more compact, face 25 size 6
   screen.font_size(6)
   screen.level(15)
   screen.text(mode_text)
-  screen.move(23, 60)
+  screen.move(23, 62)
   screen.level(3)
   screen.text(k2_text .. " " .. ek3_text)
-  screen.stroke()  
+  if value and value > 0 then
+    screen.circle(124, 60, 4*value)
+    screen.fill()
+  end
   screen.update()
 end
