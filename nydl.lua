@@ -960,8 +960,10 @@ function normalize_amp(track)
   local lowestAmp = 1
   local highestAmp = 0.00001
   for i=1,129,1 do
-    lowestAmp = math.min(amplitudes[track][i] or 1, lowestAmp)
-    highestAmp = math.max(amplitudes[track][i] or 0.00001, highestAmp)
+    if amplitudes[track][i] > 0 then
+      lowestAmp = math.min(amplitudes[track][i] or 1, lowestAmp)
+      highestAmp = math.max(amplitudes[track][i] or 0.00001, highestAmp)
+    end
   end
   amplitudes[track].lowest = lowestAmp
   amplitudes[track].highest = highestAmp
