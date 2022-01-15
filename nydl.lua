@@ -61,6 +61,17 @@ CROW_SIXTEENTH = 9
 --CROW_24PPQN = 11
 --CROW_48PPQN = 12
 
+EK3_LEVEL = 1 -- mute, level
+EK3_LOOP = 2 -- {64 steps, 32 steps, 16 steps, 8 steps, 4 steps, 2 steps, 1 step} when pressed {left/right} when not pressed
+EK3_RESET = 3 -- reset all, no enc meaning
+EK3_FX1 = 4
+EK3_FX2 = 5
+EK3_FX3 = 6
+
+EK3_OPTIONS = {"level", "loop", "reset", "fx1", "fx2", "fx3"}
+
+k3_pressed = false
+
 -- Global script data
 transport = true
 sequence = { {}, {}, {}, {} }
@@ -1516,6 +1527,7 @@ function init()
       end
     end
   end)
+  params:add_option("ek3", "e3/k3", EK3_OPTIONS, 1)
   
   params:add_group("storage", 3)
   params:add_file("sequence_file", "sequence file")
@@ -1690,9 +1702,85 @@ function init()
   params:read(nil)
 end
 
+EK3_OPTIONS = {"level", "loop", "reset", "fx1", "fx2", "fx3"}
+
+
+function adjust_param_by(param, delta)
+  local raw = params:get_raw(param)
+  raw = raw + delta/100
+  if raw > 1 then 
+    raw = 1 
+  elseif raw < 0 then
+    raw = 0 
+  end
+  params:set_raw(param, raw)  
+end
+
 function enc(n, d)
   if n == 1 then
     screen_track = mod_but_oneindex(math.floor(screen_track + d), 4)
+  elseif n == 2 then
+    params:set("ek3", mod_but_oneindex(params:get("ek3") + d, #EK3_OPTIONS))
+  elseif n == 3 then
+    local ek3 = params:get("ek3")
+    if ek3 == EK3_LEVEL then
+      adjust_param_by(pn("level", screen_track), d)
+    elseif ek3 == EK3_LOOP then
+      local loop_start = params:get(pn("start", screen_track))
+      local loop_end = params:get(pn("end", screen_track))
+      local loop_len = loop_end - loop_start + 1
+      if k3_pressed then
+        --- Loop length
+        if d > 0 and loop_len < 64 then
+          -- lengthen loop
+          local new_end = loop_start + (loop_len * 2) - 1
+          local new_start = loop_start
+          if new_end > 64 then
+            new_start = new_start - (new_end - 64)
+            new_end = 64
+          end
+          if new_start < 1 then
+            new_start = 1
+          end
+          tools.loop.apply(screen_track, {first = new_start, last = new_end})
+          --params:set(pn("start", screen_track), new_start)
+          --params:set(pn("end", screen_track), new_end)
+        elseif d < 0 and loop_len > 1 then
+          -- shorten loop
+          tools.loop.apply(screen_track, {first = loop_start, last=loop_start + math.floor(loop_len/2) - 1})
+          -- params:set(pn("end", screen_track), loop_start + math.floor(loop_len/2) - 1)
+        end
+      else
+        -- Loop position
+        if d < 0 then
+          local new_start = loop_start - loop_len
+          if new_start < 1 then
+            new_start = 1
+          end
+          local new_end = new_start + loop_len - 1
+          tools.loop.apply(screen_track, {first=new_start, last=new_end})
+          -- params:set(pn("start", screen_track), new_start)
+          -- params:set(pn("end", screen_track), new_end)          
+        elseif d > 0 then
+          local new_end = loop_end + loop_len
+          if new_end > 64 then
+            new_end = 64
+          end
+          local new_start = new_end - loop_len + 1
+          tools.loop.apply(screen_track, {first=new_start, last=new_end})
+          -- params:set(pn("start", screen_track), new_start)
+          -- params:set(pn("end", screen_track), new_end)           
+        end
+      end
+    elseif ek3 == EK3_RESET then
+      -- pass
+    elseif ek3 == EK3_FX1 then
+      adjust_param_by(pn("fx1_rate", screen_track), d)
+    elseif ek3 == EK3_FX2 then
+      adjust_param_by(pn("fx2_cutoff", screen_track), d)
+    elseif ek3 == EK3_FX3 then
+      adjust_param_by("send_delay", d)
+    end
   end
 end
 
@@ -1721,6 +1809,26 @@ function key(n, z)
       record_press_initiated(screen_track)
     else
       record_released(screen_track)
+    end
+  elseif n == 3 then
+    k3_pressed = true
+    if z == 1 then
+      local ek3 = params:get("ek3")
+      if ek3 == EK3_LEVEL then
+        params:set(pn("mute", screen_track), 1 - params:get(pn("mute", screen_track)))
+      elseif ek3 == EK3_LOOP then
+        -- pass
+      elseif ek3 == EK3_RESET then
+        reset_all()
+      elseif ek3 == EK3_FX1 then
+        params:set(pn("fx1_on", screen_track),  1 - params:get(pn("fx1_on", screen_track)))
+      elseif ek3 == EK3_FX2 then
+        params:set(pn("fx2_on", screen_track),  1 - params:get(pn("fx2_on", screen_track)))
+      elseif ek3 == EK3_FX3 then
+        params:set(pn("fx3_on", screen_track),  1 - params:get(pn("fx3_on", screen_track)))
+      end
+    else
+      k3_pressed = false
     end
   end
 end
@@ -1788,35 +1896,89 @@ function redraw()
     screen.level(15)
     screen.line_rel(0, 8)
   end
+  local k2_text = ""
+  local mode_text = ""
   if mode == MODE_SEQUENCE then
-    screen.move(0, 60)
-    screen.level(10)
     if params:get(pn("mute", screen_track)) > 0 then
       if record_states[screen_track] == RECORD_PLAYING then
-        screen.text("mute")
+        mode_text = "mute"
+        k2_text = "k2:mon"
       elseif record_states[screen_track] == RECORD_RECORDING then
-        screen.text("rec")
+        mode_text = "rec"
+        k2_text = ""
       elseif record_states[screen_track] == RECORD_ARMED then
-        screen.text("arm")
+        mode_text = "arm"
+        k2_text = "k2:unarm"
       elseif record_states[screen_track] == RECORD_MONITORING then
-        screen.text("monitor")        
+        mode_text = "mon"
+        k2_text = "k2:rec"
       elseif record_states[screen_track] == RECORD_RESAMPLING then
-        screen.text("rsmpl")          
+        mode_text = "rsmpl"
       end      
     else
       if record_states[screen_track] == RECORD_PLAYING then
-        screen.text("play")
+        mode_text = "play"
+        k2_text = "k2:mon"
       elseif record_states[screen_track] == RECORD_RECORDING then
-        screen.text("dub")
+        mode_text = "dub"
       elseif record_states[screen_track] == RECORD_MONITORING then
-        screen.text("monitor")        
+        mode_text = "mon"
+        k2_text = "k2:dub"
       elseif record_states[screen_track] == RECORD_ARMED then
-        screen.text("arm")
+        mode_text = "arm"
+        k2_text = "k2:unarm"
       elseif record_states[screen_track] == RECORD_RESAMPLING then
-        screen.text("rsmpl")           
+        mode_text = "rsmpl"
       end
-    end  
+    end
+  elseif mode == MODE_CUE then
+      if record_states[screen_track] == RECORD_PLAYING then
+        if params:get(pn("mute", screen_track)) > 0 then
+          mode_text = "mute"
+          k2_text = "k2:cue"
+        else
+          mode_text = "play"
+          k2_text = "k2:cue"
+        end
+      elseif record_states[screen_track] == RECORD_RECORDING then
+        mode_text = "seq"
+      elseif record_states[screen_track] == RECORD_MONITORING then
+        mode_text = "cue"
+        k2_text = "k2:seq"
+      elseif record_states[screen_track] == RECORD_ARMED then
+        mode_text = "arm"
+        k2_text = "k2:unarm"
+      elseif record_states[screen_track] == RECORD_RESAMPLING then
+        mode_text = "rsmpl"
+      end
   end
+  local ek3_text
+  local ek3 = params:get("ek3")
+  if ek3 == EK3_LEVEL then
+    ek3_text = "k3:mute e3:lvl"
+  elseif ek3 == EK3_LOOP then
+    if k3_pressed then
+      ek3_text = "k3:* e3:loop-len"
+    else
+      ek3_text = "k3:* e3:loop-pos"
+    end
+  elseif ek3 == EK3_RESET then
+    ek3_text = "k3:reset"
+  elseif ek3 == EK3_FX1 then
+    ek3_text = "k3:redx e3:freq"
+  elseif ek3 == EK3_FX2 then
+    ek3_text = "k3:filt e3:freq"
+  elseif ek3 == EK3_FX3 then
+    ek3_text = "k3:send e3:delay"
+  end
+  screen.move(0, 60)
+  screen.font_face(25) -- second best, and slightly more compact, face 25 size 6
+  screen.font_size(6)
+  screen.level(15)
+  screen.text(mode_text)
+  screen.move(23, 60)
+  screen.level(3)
+  screen.text(k2_text .. " " .. ek3_text)
   screen.stroke()  
   screen.update()
 end
