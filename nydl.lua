@@ -372,6 +372,7 @@ tools = {
     modes = {MODE_SEQUENCE},
     apply = function (track, sel)
       if sel ~= nil then
+        sequence[track].rectangle = nil
         local ph = playheads[track]
         local offset = ph.seq_pos - ph.loop_start
         -- print("looping", track, sel.first, sel.last)
@@ -862,7 +863,7 @@ end
 
 function screen_clock()
   while true do
-    clock.sleep(1/params:get("framerate"))
+    clock.sleep(1/15.0)
     redraw()
   end
 end
@@ -960,13 +961,14 @@ function normalize_amp(track)
   local lowestAmp = 1
   local highestAmp = 0.00001
   for i=1,129,1 do
-    if amplitudes[track][i] > 0 then
+    if amplitudes[track][i] ~= nil and amplitudes[track][i] > 0 then
       lowestAmp = math.min(amplitudes[track][i] or 1, lowestAmp)
       highestAmp = math.max(amplitudes[track][i] or 0.00001, highestAmp)
     end
   end
   amplitudes[track].lowest = lowestAmp
   amplitudes[track].highest = highestAmp
+  amp_to_rectangle(track)
 end
 
 function on_loop(track)
@@ -1162,6 +1164,7 @@ function g.key(x, y, z)
       for i=sel.first,sel.last,1 do
         sequence[track][i].mute = not sequence[track][i].mute
       end
+      sequence[track].rectangle = nil
     else
       params:set(pn("mute", track), params:get(pn("mute", track)) > 0 and 0 or 1)
     end
@@ -1170,11 +1173,23 @@ function g.key(x, y, z)
   local tool = lookup_tool(x, y, mode)
   if tool ~= nil then
     if tab.contains(tool.modes, mode) then
+      if mode == MODE_CUE then
+        for track=1,4,1 do
+          if record_states[track] == RECORD_RECORDING then
+            sequence[track].rectangle = nil
+          end
+        end
+      end
       if z == 1 then
         tool.pressed = true
         if tool.apply ~= nil and mode == MODE_SEQUENCE then
           for track=1,4,1 do
-            tool.apply(track, active_selection(track))
+            local sel = active_selection(track)
+            tool.apply(track, sel)
+            if sel ~= nil then
+              -- invalidate the drawn sequence
+              sequence[track].rectangle = nil
+            end
           end
         elseif tool.onPress ~= nil and mode == MODE_CUE then
           for i=1,4,1 do
@@ -1242,6 +1257,9 @@ function osc_in(path, args, from)
     if amplitudes[track] ~= nil then
       amplitudes[track][slice] = amp
     end
+    if slice % 8 == 0 then
+      amp_to_rectangle(track)
+    end
   elseif path == "/report" then
     local track = args[1]
     local pos = args[2]
@@ -1272,7 +1290,7 @@ function osc_in(path, args, from)
     local track = args[1]
     local filename = args[2]
     params:set(pn("load", track), filename, true)
-    tracks_written = tracks_written
+    tracks_written = tracks_written + 1
     if tracks_written == 4 then
       print("Saving params", params:get("save_as"))
       params:write(params:get("save_as"))
@@ -1515,9 +1533,6 @@ function init()
       end
     end,
     false)
-  params:add_group("display (ico clock badness)", 2)
-  params:add_binary("display_sequence", "display sequence", "toggle", 1)
-  params:add_number("framerate", "framerate", 1, 15, 10)
   clock.run(function ()
     while true do
       local every = params:get("reset_all_every")
@@ -1835,59 +1850,90 @@ function key(n, z)
   end
 end
 
+AMP_FMT = string.rep('b', 128*9)
+
+function amp_to_rectangle(track)
+  local highest = amplitudes[track].highest or 1
+  local ret = {}
+  for slice=1,128,1 do
+    local amp = amplitudes[track][slice] or 0
+    local normalized = 10*amp/highest
+    for row=1,9,1 do
+      local threshold = 10-row
+      threshold = (threshold*threshold)/10
+      local remainder = normalized - threshold
+      local level = 0
+      if remainder ~= remainder then
+        -- nan
+        level = 0
+      elseif remainder > 1 then
+        level = 6
+      elseif remainder > 0 then
+        level = math.floor(6*remainder)
+      end
+      local idx = mul_but_oneindex(row, 128) + slice - 1
+      ret[idx] = level
+    end
+  end
+  amplitudes[track].rectangle = string.pack(AMP_FMT, table.unpack(ret))
+  for i=1,128*9,1 do
+    ret[i] = math.floor(ret[i]/3)
+  end
+  amplitudes[track].dark_rectangle = string.pack(AMP_FMT, table.unpack(ret))
+end
+
+SEQ_FMT = string.rep('b', 128)
+
+function seq_to_rectangle(track)
+  if sequence[track].rectangle ~= nil then
+    return
+  end
+  local ret = {}
+  for slice=1,128,1 do
+    local playhead = playheads[track]
+    local seq_pos = div_but_oneindex(slice, 2)
+    local step = sequence[track][seq_pos]
+    local begin = slice % 2 > 0
+    local loop_divisor = 1
+    local level = 1
+    if seq_pos >= playhead.loop_start and seq_pos <= playhead.loop_end then
+      level = 2
+    else
+      loop_divisor = 2
+    end
+    if step.buf_pos ~= seq_pos or step.rate ~= 1 then
+      level = 4/loop_divisor
+    end      
+    if (step.lock_pos or step.lock_rate) and begin then
+      level = 10/loop_divisor
+    end
+    if step.mute then
+      level = 0
+    end
+    ret[slice] = level
+  end
+  sequence[track].rectangle = string.rep(string.pack(SEQ_FMT, table.unpack(ret)), 2)
+end
+
 function redraw()
   screen.clear()
   for track=1,4,1 do
     -- The audio
     local track_start_y = mul_but_oneindex(track, 14)
     local highest = amplitudes[track].highest or 1
-    for slice=1,128,1 do
-      local lamp = 1
-      if amplitudes[track][slice] ~= nil and amplitudes[track][slice] > 0 then
-        lamp = math.max(8*amplitudes[track][slice]/highest, 1)-- math.max(8+math.log(amplitudes[track][slice]), 1)        
+    seq_to_rectangle(track) -- stores it in sequence[track].rectangle
+    screen.poke(0, track_start_y + 10, 128, 2, sequence[track].rectangle)
+    if params:get(pn("mute", track)) > 0 then
+      if amplitudes[track].dark_rectangle ~= nil then
+        screen.poke(0, track_start_y, 128, 9, amplitudes[track].dark_rectangle)
       end
-      screen.move(slice-1, track_start_y+5)
-      screen.move_rel(0, lamp/2)
-      local level = 5
-      if params:get(pn("mute", track)) > 0 then
-        level = 2
+    else
+      if amplitudes[track].rectangle ~= nil then
+        screen.poke(0, track_start_y, 128, 9, amplitudes[track].rectangle)
       end
-      screen.level(level)
-      screen.line_rel(0, -1 * lamp)
-      screen.stroke()
-      
-      -- The sequence
-      if params:get("display_sequence") > 0 then
-        local playhead = playheads[track]
-        screen.move(slice, track_start_y+10)
-        local seq_pos = div_but_oneindex(slice, 2)
-        local step = sequence[track][seq_pos]
-        local begin = slice % 2 > 0
-        local loop_divisor = 1
-        screen.level(1)
-        if seq_pos >= playhead.loop_start and seq_pos <= playhead.loop_end then
-          screen.level(2)
-        else
-          loop_divisor = 2
-        end
-        if step.buf_pos ~= seq_pos or step.rate ~= 1 then
-          screen.level(4/loop_divisor)
-        end      
-        if (step.lock_pos or step.lock_rate) and begin then
-          screen.level(10/loop_divisor)
-        end
-        if step.mute then
-          screen.level(0)
-        end
-        if seq_pos == playhead.seq_pos then
-          screen.level(15)
-        end
-        screen.line_rel(0, 2)
-        screen.stroke()
-      end    
     end
     if track == screen_track then
-      screen.move(0, track_start_y + 5)
+      screen.move(0, track_start_y + 10)
       screen.level(15)
       screen.line_rel(129, 0)
       screen.stroke()
@@ -1896,7 +1942,7 @@ function redraw()
     local ph = playheads[track]
     screen.move(ph.actual_buf_pos*2, track_start_y)
     screen.level(15)
-    screen.line_rel(0, 8)
+    screen.line_rel(0, 9)
   end
   local k2_text = ""
   local mode_text = ""

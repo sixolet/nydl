@@ -441,6 +441,10 @@ Engine_NotYourDreamLooper : CroneEngine {
 		this.addCommand("realloc", "if", { |msg|
 			var track = msg[1].asInteger - 1;
 			var div = msg[2].asFloat;
+			"realloc".postln;
+			if (tracks == nil, {
+				this.initTracks;
+			});
 			tracks[track].realloc(div);
 		});
 
@@ -504,6 +508,8 @@ Engine_NotYourDreamLooper : CroneEngine {
 			var hz = msg[1].asFloat;
 			Synth(\metronome, [hz: hz]);
 		});
+
+		this.initTracks;
 	}
 
 	free {
