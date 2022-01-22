@@ -1,3 +1,13 @@
+-- nydl
+-- unversioned; @sixolet
+--
+-- Clocked looper, beat slicer, and sequencer
+--
+-- E1: Select track
+-- K2: Monitor/Record
+-- E2: Select function for K3/E3
+--
+
 tab = require 'tabutil'
 
 
@@ -966,7 +976,9 @@ function normalize_amp(track)
   local highestAmp = 0.00001
   for i=1,129,1 do
     if amplitudes[track][i] ~= nil and amplitudes[track][i] > 0 then
-      lowestAmp = math.min(amplitudes[track][i] or 1, lowestAmp)
+      if i > 2 then
+        lowestAmp = math.min(amplitudes[track][i] or 1, lowestAmp)
+      end
       highestAmp = math.max(amplitudes[track][i] or 0.00001, highestAmp)
     end
   end
@@ -1213,7 +1225,8 @@ function g.key(x, y, z)
             if record_states[i] ~= RECORD_PLAYING then
               tool.onReleaseAlways(i)
             end
-          end        end
+          end        
+        end
         if tool.onRelease ~= nil and mode == MODE_CUE then
           for i=1,4,1 do
             if track_cued(i) then
@@ -1410,22 +1423,30 @@ function grid_redraw()
       local range = math.log(highest/lowest)
       local step_data = sequence[step.track][step.index]
       if mode == MODE_SEQUENCE then
-        local amp1 = amplitudes[step.track][mul_but_oneindex(step_data.buf_pos, 2)] or 0.000001
-        local amp2 = amplitudes[step.track][mul_but_oneindex(step_data.buf_pos, 2) + 1] or 0.000001
-        local logAmp = math.log( (amp1+amp2) / (2*highest) )
-        
+        local amp1 = amplitudes[step.track][mul_but_oneindex(step_data.buf_pos, 2)] or 0
+        local amp2 = amplitudes[step.track][mul_but_oneindex(step_data.buf_pos, 2) + 1] or 0
+        local amp = math.max(amp1, amp2)/highest
+        if highest/lowest > 10 then
+          amp = math.sqrt(amp)
+        elseif highest/lowest < 5 then
+          amp = amp*amp
+        end
         if step.index >= playhead.loop_start and step.index <= playhead.loop_end then
-          level = math.min(math.max(level, math.floor(12*(amp1+amp2)/highest), IN_LOOP), 15)
+          level = math.max(level, math.floor(13*amp))
         else
-          level = math.max(level, math.floor(6*(amp1+amp2)/highest), level)          
+          level = math.max(level, math.floor(7*amp))         
         end
       end
       if mode == MODE_CUE then
-        local amp1 = amplitudes[step.track][mul_but_oneindex(step.index, 2)] or 0.000001
-        local amp2 = amplitudes[step.track][mul_but_oneindex(step.index, 2) + 1] or 0.000001
-
-        local logAmp = math.log( (amp1+amp2) / (2*highest) )
-        level = math.max(level, 10 + math.floor(10*logAmp/range), 1)
+        local amp1 = amplitudes[step.track][mul_but_oneindex(step.index, 2)] or 0
+        local amp2 = amplitudes[step.track][mul_but_oneindex(step.index, 2) + 1] or 0
+        local amp = math.max(amp1, amp2)/highest
+        if highest/lowest > 10 then
+          amp = math.sqrt(amp)
+        elseif highest/lowest < 5 then
+          amp = amp*amp
+        end
+        level = math.max(level, math.floor(13*amp))
       end
       if selection ~= nil then
         if step.index >= selection.first and step.index <= selection.last then
@@ -1441,7 +1462,12 @@ function grid_redraw()
       if mode == MODE_CUE and step.index == math.floor(playhead.actual_buf_pos) + 1 then
         level = ACTIVE
       end
-      g:led(x, y, level)
+      level = math.floor(level)
+      if level >= 0 and x > 0 and y > 0 then
+        g:led(x, y, level)
+      else
+        print("oh no bad int", level)
+      end
     end
   end
 end
@@ -1726,7 +1752,20 @@ function init()
       b = clock.get_beats()
       engine.tempo_sync(b, bpm/60.0)
       core_tempo_action(bpm)
-    end)
+  end)
+  params:add_binary("enable_tt", "teletype control", "toggle", 0)
+  params:set_action("enable_tt", function (on) 
+    if on > 0 then
+      crow.send([[
+        function ii.self.call3(track, first, last)
+          tell('cue_select', track, first, last)
+        end
+        function ii.self.call4(track, tool, z, extra_value)
+          tell('tool', track, tool, z, extra_value)
+        end
+      ]])
+    end
+  end)
   clock.run(sync_every_beat)
   clock.run(crow_every_beat)
   
@@ -2077,4 +2116,109 @@ function redraw()
     screen.fill()
   end
   screen.update()
+end
+
+crow_selected = {nil, nil, nil, nil}
+
+norns.crow.events.tool = function(track, t, z, extra_value)
+  track = math.floor(track)
+  t = math.floor(t)
+  print("tool", track, t, z, extra_value)
+  if mode == MODE_CUE then
+    local tool
+    if t == 0 then
+      tool = tools.normal
+    elseif t == 1 then
+      tool = tools.reverse
+    elseif t == 2 then
+      tool = tools.stutter2
+    elseif t == 3 then
+      tool = tools.stutter3
+    elseif t == 4 then
+      tool = tools.stutter4
+    elseif t == 5 then
+      tool = tools.slow
+    elseif t == 6 then
+      tool = tools.fast
+    elseif t == 7 then
+      tool = tools.fx1
+    elseif t == 8 then
+      tool = tools.fx2
+    elseif t == 9 then
+      tool = tools.fx3
+    elseif t == 10 then
+      tool = tools.stall
+    elseif t == 11 then
+      -- mute
+      params:set(pn("mute", track), z)
+    end
+    if tool ~= nil then
+      if record_states[track] == RECORD_RECORDING then
+        sequence[track].rectangle = nil
+      end
+      end
+      if z == 1 then
+        tool.pressed = true
+        if tool.onPress ~= nil then
+          if record_states[track] ~= RECORD_PLAYING then
+            was_cued[track] = true
+            tool.onPress(track)
+          end
+        end
+        if tool.handle ~= nil then
+          tool.handle()
+        end
+      else
+        tool.pressed = false
+        if tool.onReleaseAlways ~= nil then
+          if record_states[track] ~= RECORD_PLAYING then
+            tool.onReleaseAlways(track)
+          end
+        end
+        if tool.onRelease ~= nil then
+          if track_cued(track) then
+            tool.onRelease(track)
+          end
+        end
+      end
+      grid_dirty = true
+    end
+end
+
+norns.crow.events.cue_select = function(track, first, last)
+  print("cue select", track, first, last)
+  if mode == MODE_CUE then
+    if crow_selected[track] then
+      -- clear current crow selection
+      manage_selection(0, {
+        track = track,
+        step = crow_selected[track].first,
+        index = crow_selected[track].first,
+      }, step_selections, false, false)
+      if crow_selected[track].first ~= crow_selected[track].last then
+        manage_selection(0, {
+          track = track,
+          step = crow_selected[track].last,
+          index = crow_selected[track].last,
+        }, step_selections, false, false)
+      end
+      crow_selected[track] = nil
+    end
+    if first > 0 then
+      manage_selection(1, {
+        track = track,
+        step = first,
+        index = first,
+      }, step_selections, false, false)
+      if last > first then
+
+        manage_selection(1, {
+        track = track,
+        step = last,
+        index = last,
+        }, step_selections, false, false)
+      end
+      crow_selected[track] = {first = first, last = math.max(first, last)}
+    end
+  end
 end
