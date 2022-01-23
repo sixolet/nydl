@@ -156,8 +156,17 @@ NydlTrack {
 
 	playStep { |pos, rate, loop|
 		if (synth != nil, {
+			var closureSynth = synth;
 			synth.set(\gate, 0);
-			// "stopping % id %\n".postf(synth, synth.nodeID);
+			// There may be a race condition when under computer control and the synth gets its
+			// gate set to 0 before it ever starts, so it doesn't clean itself up.
+			TempoClock.sched(4, {
+				if (closureSynth.isPlaying, {
+					closureSynth.free;
+				});
+			});
+		}, {
+			"no prev step to stop".postln;
 		});
 		if (recording && (monitorSynth != nil), {
 			monitorSynth.set(\gate, 0);
@@ -178,6 +187,7 @@ NydlTrack {
 			level: level,
 			track: track,
 		]);
+		NodeWatcher.register(synth, assumePlaying: true);
 		// "playing % id %\n".postf(synth, synth.nodeID);
 	}
 
